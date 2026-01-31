@@ -13,7 +13,7 @@ Other features are:
 - Being able to hear and see normally whilst dead
 
 ## Installation
-Go over to Steam -> Library and find Garry's Mod. Then right click -> Manage -> Browse local files. From there open `garrysmod` and put [dem.lua](https://github.com/copykot/demo-tool/dem.lua) inside the `lua` folder.
+Go over to Steam -> Library and find Garry's Mod. Then right click -> Manage -> Browse local files. From there open `garrysmod` and put [dem.lua](https://github.com/copykot/demo-tool/blob/main/dem.lua) inside the `lua` folder.
 
 Once you're in a demo, type in console `sv_allowcslua 1` followed by `lua_openscript_cl dem.lua`.
 
