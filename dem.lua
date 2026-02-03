@@ -15,12 +15,15 @@ local color_black = Color(0, 0, 0, 255)
 local vars = {
 	enabled = CreateClientConVar("_demo_esp_enabled", "1", true, false),
 	alive_only = CreateClientConVar("_demo_esp_alive_only", "0", true, false),
+	vehicles = CreateClientConVar("_demo_esp_vehicle_info", "1", true, false),
 	hover = CreateClientConVar("_demo_esp_hover", "0", true, false),
 
 	show_steamid = CreateClientConVar("_demo_esp_show_steamid", "1", true, false),
 	show_rpname = CreateClientConVar("_demo_esp_show_rpname", "1", true, false),
 	show_weapon = CreateClientConVar("_demo_esp_show_weapon", "1", true, false),
 	show_health = CreateClientConVar("_demo_esp_show_health", "1", true, false),
+	show_warrant = CreateClientConVar("_demo_esp_show_warrant", "0", true, false),
+	show_status = CreateClientConVar("_demo_esp_show_status", "0", true, false),
 
 	outline = CreateClientConVar("_demo_esp_draw_outline", "0", true, false),
 	range = CreateClientConVar("_demo_esp_range", "1000", true, false),
@@ -186,6 +189,7 @@ end
 
 local _gui_data = {
 	{ type = "checkbox", label = "Enable ESP", var = vars.enabled },
+	{ type = "checkbox", label = "Draw vehicle info", var = vars.vehicles },
 	{ type = "checkbox", label = "Only draw alive players", var = vars.alive_only },
 	{ type = "checkbox", label = "ESP on hover", var = vars.hover },
 	{ type = "checkbox", label = "ESP outline", var = vars.outline },
@@ -195,6 +199,8 @@ local _gui_data = {
 	{ type = "checkbox", label = "Show steam ID", var = vars.show_steamid },
 	{ type = "checkbox", label = "Show health info", var = vars.show_health },
 	{ type = "checkbox", label = "Show weapon", var = vars.show_weapon },
+	{ type = "checkbox", label = "Show status", var = vars.show_status },
+	{ type = "checkbox", label = "Show warrant", var = vars.show_warrant },
 	{ type = "checkbox", label = "Show console kill logs", var = vars.logs },
 	{ type = "checkbox", label = "Disable UIs", var = vars.disable_uis },
 }
@@ -378,10 +384,19 @@ local function InitDemoPanel(ply, bind, pressed, code)
 			filter = LocalPlayer()
 		})
 
-		if IsValid(tr.Entity) and tr.Entity:IsPlayer() then
-			actions:AddOption("Spectate", function() SpectatePlayer(tr.Entity) end)
-			actions:AddOption("Copy SteamID", function() SetClipboardText(tr.Entity:SteamID()) end)
-			actions:AddOption("Isolate voice", function() target.voice = tr.Entity:EntIndex() end)
+		local ply = tr.Entity
+		if IsValid(tr.Entity) and not tr.Entity:IsPlayer() then
+			if tr.Entity:IsRagdoll() then
+				-- I don't know how to get the owner of a ragdoll, soz
+			elseif tr.Entity:IsVehicle() then
+				ply = ply:GetNWEntity("owner", nil)
+			end
+		end
+
+		if IsValid(ply) and ply:IsPlayer() and ply ~= LocalPlayer() then
+			actions:AddOption("Spectate", function() SpectatePlayer(ply) end)
+			actions:AddOption("Copy SteamID", function() SetClipboardText(ply:SteamID()) end)
+			actions:AddOption("Isolate voice", function() target.voice = ply:EntIndex() end)
 		else
 			actions:AddOption("Aim at a player")
 		end
@@ -434,14 +449,22 @@ local function DrawText(font, x, y, text, color)
 	draw.SimpleTextOutlined(text, font, x, y, color, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, 1, Color(0, 0, 0, color.a))
 end
 
+player_GetBloodLevel = player_GetBloodLevel or PLAYER.GetBloodLevel
+player_GetBleedingAmount = player_GetBleedingAmount or PLAYER.GetBleedingAmount
+
 local function DrawClientESP(ply)
 	local font = "demo_mtext"
 	local color = team.GetColor(ply:Team())
 	local c = ply:WorldSpaceCenter():ToScreen()
 
-	if not ply:Alive() then
+
+	if not player_Alive(ply) then
 		if vars.alive_only:GetBool() then return end
-		color.a = color.a * .4
+
+		local ragdoll = ply:GetNWEntity("ragdoll", nil)
+		if IsValid(ragdoll) then
+			c = ragdoll:WorldSpaceCenter():ToScreen()
+		end
 	end
 
 	local yoffset = -ScaleSize(20)
@@ -458,21 +481,121 @@ local function DrawClientESP(ply)
 		yoffset = yoffset + ScaleSize(20)
 	end
 
-	if vars.show_health:GetBool()  then
-		local health_text = "Health: " .. ply:Health() .. " Armour: " .. ply:Armor() .. (ply:GetNWBool("crippled") and " (Crippled)" or "")
-		DrawText(font, c.x, c.y + yoffset, health_text, color)
+	if vars.show_health:GetBool() then
+		local str = ""
+
+		if player_Alive(ply) then
+			if ply:Health() > 0 and ply:Health() ~= ply:GetMaxHealth() then
+				str = ply:Health() .. " HP"
+			end
+
+			if ply:Armor() > 0 and ply:Armor() ~= ply:GetMaxArmor() then
+				str = str ..  " " .. ply:Armor() .. " AP"
+			end
+		else
+			if ply:CanBeRevived() then
+				str = "Time left: " .. string.ToMinutesSeconds(ply:GetReviveTime() - CurTime())
+			else
+				str = "Dead"
+			end
+		end
+
+		if str ~= "" then
+			DrawText(font, c.x, c.y + yoffset, str, color)
+			yoffset = yoffset + ScaleSize(20)
+		end
+	end
+
+	if vars.show_status:GetBool() then
+		local alive = player_Alive(ply)
+		local crippled = ply:GetNWBool("crippled")
+		local splint = ply:GetNWBool("hasSplint")
+
+		local text = {}
+		if (crippled or splint) and alive then
+			table.insert(text, crippled and "Crippled" or "Splinted")
+		end
+
+		local last_shot = ply:GetNWFloat("LastShot", nil)
+		if last_shot and CurTime() - last_shot < 75 then
+			table.insert(text, "shot")
+		end
+
+		if player_GetBleedingAmount(ply) > 0 and alive then
+			table.insert(text, "bleeding")
+		end
+
+		if #text > 0 then
+			DrawText(font, c.x, c.y + yoffset, table.concat(text, ", "), Color(255, 50, 50, 255))
+			yoffset = yoffset + ScaleSize(20)
+		end
+	end
+
+	local search = ply:HasSearchWarrant()
+	local warranted = ply:IsWarranted()
+	local bolo = ply:HasBolo()
+	local robber = ply:GetNWBool("robber", false)
+	if vars.show_warrant:GetBool() and (search or warranted or bolo or robber) then
+		local str = robber and "Bank Bobber" or "Warranted"
+		if search or bolo then
+			str = search and "Search warrant" or "BOLO"
+		end
+
+		DrawText(font, c.x, c.y + yoffset, str, Color(255, 50, 50, 255))
+		yoffset = yoffset + ScaleSize(20)
+	end
+
+	-- Untested, not sure if this works correctly
+	if ply:GetNWBool("InEvent", false) then
+		DrawText(font, c.x, c.y + yoffset, "Event player", Color(200, 200, 100, 255))
 		yoffset = yoffset + ScaleSize(20)
 	end
 
 	if vars.show_weapon:GetBool() then
-		local str = "<no item>"
+		local str = nil
 
 		local swep = ply:GetActiveWeapon()
-		if IsValid(swep) then
+		local restrained = ply:GetNWInt("restrained", 0)
+		if restrained == 1 then
+			str = "Cuffed"
+		elseif restrained == 2 then
+			str = "Ziptied"
+		elseif IsValid(swep) and swep:GetClass() ~= "roleplay_keys" then
 			str = swep.PrintName or swep:GetClass()
 		end
 
-		DrawText(font, c.x, c.y + yoffset, str, color)
+		if str then
+			DrawText(font, c.x, c.y + yoffset, str, restrained and Color(255, 175, 100, 255) or color)
+			yoffset = yoffset + ScaleSize(20)
+		end
+	end
+end
+
+local function DrawVehicleESP(ent, hovered)
+	if not vars.vehicles:GetBool() then return end
+	local font = "demo_mtext"
+	local c = ent:WorldSpaceCenter():ToScreen()
+	local color = color_white
+
+	local yoffset = -ScaleSize(20)
+
+	local owner = ent:GetNWEntity("owner", nil)
+	if hovered and IsValid(owner) and owner:IsPlayer() then
+		DrawText("demo_text", c.x, c.y + yoffset, "Owned by " .. FormatPlayerName(owner), color)
+		yoffset = yoffset + ScaleSize(20)
+	end
+
+	local health = ent:Health()
+	if vars.show_health:GetBool() and health > 0 and health ~= ent:GetMaxHealth() then
+		DrawText(font, c.x, c.y + yoffset, health .. " HP", color)
+		yoffset = yoffset + ScaleSize(20)
+	end
+
+	local velocity = ent:GetVelocity():Length()
+	if velocity > 5 then
+		local speed = math.Round(velocity / 17.6)
+
+		DrawText(font, c.x, c.y + yoffset, tostring(speed) .. " MPH", color)
 		yoffset = yoffset + ScaleSize(20)
 	end
 end
@@ -569,20 +692,25 @@ local function HUDPaintESP()
 		DrawText("demo_info_big", ScrW() / 2, y, str, color)
 	end
 
+	local tr = util.TraceLine({
+		start = GetEyePos(),
+		endpos = GetEyePos() + (GetEyeAngles():Forward() * 8192),
+		filter = GetTarget(),
+	})
+
 	if vars.enabled:GetBool() then
 		local target = GetTarget()
-		for i, ply in ipairs(player.GetAll()) do
-			if IsValid(ply) and not ply:IsDormant() and (vars.noclip or ply ~= target) and GetEyePos():DistToSqr(ply:GetPos()) <= vars.range:GetInt()^2 then
+		local range = vars.range:GetInt() ^ 2
+
+		for i, ent in ents.Iterator() do
+			local ply = ent
+			if ent:IsPlayer() and not ply:IsDormant() and (vars.noclip or vars.thirdperson or ply ~= target) and GetEyePos():DistToSqr(ply:GetPos()) <= range then
 				DrawClientESP(ply)
+			elseif ent:IsVehicle() and not ent:IsDormant() and GetEyePos():DistToSqr(ent:GetPos()) <= range then
+				DrawVehicleESP(ent, tr.Entity == ent)
 			end
 		end
 	elseif vars.hover:GetBool() and vars.noclip then -- we only really care about hover ESP if we're in noclip
-		local tr = util.TraceLine({
-			start = GetEyePos(),
-			endpos = GetEyePos() + (GetEyeAngles():Forward() * 8192),
-			filter = GetTarget(),
-		})
-
 		if IsValid(tr.Entity) and tr.Entity:IsPlayer() then
 			DrawClientESP(tr.Entity)
 		end
@@ -650,9 +778,9 @@ local function DrawOutlines()
 	local range = vars.range:GetInt() ^ 2
 
 	local teams = {}
-	for i, ply in ipairs(player.GetAll()) do
+	for i, ply in player.Iterator() do
 		-- We don't want to draw the outline for players who are dead. Their SetupBones does not correspond to their ragdoll's SetupBones and it looks weird.
-		if IsValid(ply) and ply:Alive() and not ply:IsDormant() and (vars.noclip or ply ~= target) and GetEyePos():DistToSqr(ply:GetPos()) <= range then
+		if IsValid(ply) and player_Alive(ply) and not ply:IsDormant() and (vars.noclip or ply ~= target) and GetEyePos():DistToSqr(ply:GetPos()) <= range then
 			local ply_team = ply:Team()
 			teams[ply_team] = teams[ply_team] or {}
 			table.insert(teams[ply_team], ply)
@@ -773,7 +901,6 @@ function PLAYER:Alive()
 	return player_Alive(self)
 end
 
-player_GetBloodLevel = player_GetBloodLevel or PLAYER.GetBloodLevel
 function PLAYER:GetBloodLevel()
 	if ShouldOverride(self) then
 		return 100
@@ -782,7 +909,6 @@ function PLAYER:GetBloodLevel()
 	return player_GetBloodLevel(self)
 end
 
-player_GetBleedingAmount = player_GetBleedingAmount or PLAYER.GetBleedingAmount
 function PLAYER:GetBleedingAmount()
 	if ShouldOverride(self) then
 		return 0
