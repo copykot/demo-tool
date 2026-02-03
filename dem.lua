@@ -18,12 +18,15 @@ local vars = {
 	vehicles = CreateClientConVar("_demo_esp_vehicle_info", "1", true, false),
 	hover = CreateClientConVar("_demo_esp_hover", "0", true, false),
 
+	time = CreateClientConVar("_demo_show_time", "1", true, false),
 	show_steamid = CreateClientConVar("_demo_esp_show_steamid", "1", true, false),
 	show_rpname = CreateClientConVar("_demo_esp_show_rpname", "1", true, false),
+	show_rank = CreateClientConVar("_demo_esp_show_rank", "1", true, false),
 	show_weapon = CreateClientConVar("_demo_esp_show_weapon", "1", true, false),
 	show_health = CreateClientConVar("_demo_esp_show_health", "1", true, false),
 	show_warrant = CreateClientConVar("_demo_esp_show_warrant", "0", true, false),
 	show_status = CreateClientConVar("_demo_esp_show_status", "0", true, false),
+	show_jobs = CreateClientConVar("_demo_esp_show_jobs", "0", true, false),
 
 	outline = CreateClientConVar("_demo_esp_draw_outline", "0", true, false),
 	range = CreateClientConVar("_demo_esp_range", "1000", true, false),
@@ -31,8 +34,11 @@ local vars = {
 	fov = CreateClientConVar("_demo_fov", "100", true, false),
 	logs = CreateClientConVar("_demo_kill_logs", "1", true, false),
 	disable_uis = CreateClientConVar("_demo_disable_uis", "1", true, false),
+	crosshair = CreateClientConVar("_demo_crosshair", "0", true, false),
+	zoom = CreateClientConVar("_demo_zoom", "0", true, false),
 
 	-- No point in saving these to the config
+	window = false,
 	focuslock = jit.os ~= "Windows",
 	spectate = false,
 	noclip = false,
@@ -59,6 +65,7 @@ local mouse = {
 	yaw = GetConVar("m_yaw"),
 	pitch = GetConVar("m_pitch"),
 	sens = GetConVar("sensitivity"),
+	fov = GetConVar("fov_desired"),
 }
 
 -- Allows the gamemode to show the player's RP name above their head normally
@@ -80,13 +87,17 @@ end
 
 
 -- utils
+local drawing_window = false
+local is_playing_demo = engine.IsPlayingDemo()
+local total_demo_time = string.ToMinutesSeconds(engine.GetDemoPlaybackTotalTicks() * engine.TickInterval())
+
 local function ScaleSize(size)
 	return size * (ScrW() / 2560)
 end
 
 -- In hindsight, this should've been called GetLocal instead
 local function GetTarget()
-	if vars.spectate and IsValid(target.ent) then
+	if vars.spectate and not vars.window and IsValid(target.ent) then
 		return target.ent
 	end
 
@@ -109,6 +120,21 @@ local function GetEyeAngles()
 	return GetTarget():EyeAngles()
 end
 
+local function GetFOV()
+	local fov = mouse.fov:GetFloat()
+	if vars.zoom:GetBool() and vars.spectate and IsValid(target.ent) then
+		local swep = GetTarget():GetActiveWeapon()
+
+		-- dumping LocalPlayer():GetActiveweapon():GetTable() nets these and more functions
+		if IsValid(swep) and swep.IsIronSighting and swep:IsIronSighting() then
+			local zoom = swep.GetScopeMagnification and swep:GetScopeMagnification() or 1
+			return fov / zoom
+		end
+	end
+
+	return fov
+end
+
 local function ResetMouseData()
 	mouse.ang = GetEyeAngles()
 	mouse.cam = GetEyePos()
@@ -128,7 +154,11 @@ local function SpectatePlayer(ply)
 	if target.ent then
 		target.idx = ply:EntIndex()
 		vars.spectate = true
-		vars.noclip = false
+
+		if not vars.window then
+			vars.noclip = false
+		end
+
 		ResetMouseData()
 	end
 
@@ -148,14 +178,23 @@ local function ToggleDemoNoclip()
 		-- We wish to start from whatever POV we were in previously.
 		ResetMouseData()
 
-		StopSpectating()
-
+		if not vars.window then
+			StopSpectating()
+		end
 	end
 
 	vars.noclip = state
 	ResetUI()
 end
 concommand.Add("_demo_toggle_noclip", ToggleDemoNoclip)
+
+local function ToggleWindow()
+	vars.window = not vars.window
+
+	if vars.spectate then
+		vars.noclip = false
+	end
+end
 
 local function FormatPlayerName(ply)
 	return string.format("%s (%s, %s)", ply:GetRPName(), ply:Nick(), ply:SteamID())
@@ -196,11 +235,15 @@ local _gui_data = {
 	{ type = "slider",	 label = "ESP range", var = vars.range },
 	{ type = "slider",	 label = "Thirdperson distance", var = vars.fov, min = 10, max = 150 },
 	{ type = "checkbox", label = "Show RP name", var = vars.show_rpname },
-	{ type = "checkbox", label = "Show steam ID", var = vars.show_steamid },
+	{ type = "checkbox", label = "Show job rank", var = vars.show_jobs },
+	{ type = "checkbox", label = "Show Steam ID", var = vars.show_steamid },
 	{ type = "checkbox", label = "Show health info", var = vars.show_health },
 	{ type = "checkbox", label = "Show weapon", var = vars.show_weapon },
 	{ type = "checkbox", label = "Show status", var = vars.show_status },
 	{ type = "checkbox", label = "Show warrant", var = vars.show_warrant },
+	{ type = "checkbox", label = "Draw time", var = vars.time },
+	{ type = "checkbox", label = "Replicate scope zoom when spectating", var = vars.zoom },
+	{ type = "checkbox", label = "Draw crosshair", var = vars.crosshair },
 	{ type = "checkbox", label = "Show console kill logs", var = vars.logs },
 	{ type = "checkbox", label = "Disable UIs", var = vars.disable_uis },
 }
@@ -346,14 +389,16 @@ local function InitDemoPanel(ply, bind, pressed, code)
 	local list = spec:AddSubMenu("Nearby")
 	PopulateCombobox(list, function(ply) SpectatePlayer(ply) end)
 	spec:AddOption("By Steam ID", SpectateSearch)
+	spec:AddOption("Toggle window", ToggleWindow)
 
 	-- Demo
-	if engine.IsPlayingDemo() then
+	if is_playing_demo then
 		local demo = m:AddSubMenu("Demo")
 		demo:AddOption("Pause/resume", function() RunConsoleCommand("demo_togglepause") end)
 
 		local timescale = demo:AddSubMenu("Timescale")
 		demo:AddOption("Open demoui", function() RunConsoleCommand("demoui") end)
+		demo:AddOption("stopsound", function() RunConsoleCommand("stopsound") end)
 
 		timescale:AddOption("0.1x", function() RunConsoleCommand("demo_timescale", "0.1") end)
 		timescale:AddOption("0.25x", function() RunConsoleCommand("demo_timescale", "0.25") end)
@@ -473,7 +518,13 @@ local function DrawClientESP(ply)
 		yoffset = yoffset + ScaleSize(20)
 	end
 
-	DrawText(font, c.x, c.y + yoffset, ply:Nick(), color)
+	local player_name = ply:Nick()
+	local job = ply:GetShortJobTitle()
+	if vars.show_jobs:GetBool() and job ~= "Citizen" then
+		player_name = job .. " | " .. player_name
+	end
+
+	DrawText(font, c.x, c.y + yoffset, player_name, color)
 	yoffset = yoffset + ScaleSize(20)
 
 	if vars.show_steamid:GetBool()	then
@@ -536,7 +587,7 @@ local function DrawClientESP(ply)
 	local bolo = ply:HasBolo()
 	local robber = ply:GetNWBool("robber", false)
 	if vars.show_warrant:GetBool() and (search or warranted or bolo or robber) then
-		local str = robber and "Bank Bobber" or "Warranted"
+		local str = robber and "Bank Robber" or "Warranted"
 		if search or bolo then
 			str = search and "Search warrant" or "BOLO"
 		end
@@ -615,11 +666,23 @@ end
 
 player_Alive = player_Alive or PLAYER.Alive
 local function HUDPaintESP()
+	local scrw = ScrW()
+	local scrh = ScrH()
+
 	-- Preserve audio when the local player is dead:
 	-- Due to "demo_recordcommands" always being set to 1, "soundfade" is being executed constantly to prevent players from hearing stuff when dead.
 	-- Making this one of the only viable ways to go about it.
 	if not player_Alive(LocalPlayer()) then
 		RunConsoleCommand("soundfade", "0", "0")
+	end
+
+	if is_playing_demo and vars.time:GetBool() then
+		local time = string.ToMinutesSeconds(engine.GetDemoPlaybackTick() * engine.TickInterval())
+		DrawText("demo_info_big", scrw * .92, scrw * .05, time .. " / " .. total_demo_time, color_white)
+	end
+
+	if vars.crosshair:GetBool() then
+		surface.DrawCircle(scrw / 2, scrh / 2, 3, color_white)
 	end
 
 	-- Being in noclip and tabbing out sometimes makes the camera spin out like crazy. This is mainly for Linux. The fix for Windows is much simpler.
@@ -628,11 +691,11 @@ local function HUDPaintESP()
 		if not in_focus and not mouse.lost_focus then
 			mouse.lost_focus = true
 		elseif in_focus and mouse.lost_focus then
-			DrawText("demo_info_big", ScrW() / 2, ScrH() * 0.2, "Press mouse1 to regain focus", Color(255, 0, 0, 255))
+			DrawText("demo_info_big", scrw / 2, scrh * 0.2, "Press mouse1 to regain focus", Color(255, 0, 0, 255))
 
 			if input.IsMouseDown(MOUSE_LEFT) then
 				mouse.lost_focus = false
-				input.SetCursorPos(ScrW() / 2, ScrH() / 2)
+				input.SetCursorPos(scrw / 2, scrh / 2)
 			end
 		end
 	end
@@ -644,7 +707,7 @@ local function HUDPaintESP()
 		end
 
 		if not IsValid(_demo_gui) and not IsValid(m) and allow and not vgui.CursorVisible() then
-			local cx, cy = ScrW() / 2, ScrH() / 2
+			local cx, cy = scrw / 2, scrh / 2
 			local x, y = input.GetCursorPos()
 			mouse.dx = mouse.dx + (x - cx)
 			mouse.dy = mouse.dy + (y - cy)
@@ -672,8 +735,8 @@ local function HUDPaintESP()
 
 	-- Print spectator info
 	if vars.spectate and IsValid(target.ent) then
-		local y = ScrH() * 0.03
-		DrawText("demo_info_big", ScrW() / 2, y, string.format("Spectating %s", FormatPlayerName(target.ent)), color_white)
+		local y = scrh * 0.03
+		DrawText("demo_info_big", scrw / 2, y, string.format("Spectating %s", FormatPlayerName(target.ent)), color_white)
 		y = y + draw.GetFontHeight("demo_info_big")
 
 		local color = color_white
@@ -689,7 +752,27 @@ local function HUDPaintESP()
 			end
 		end
 
-		DrawText("demo_info_big", ScrW() / 2, y, str, color)
+		DrawText("demo_info_big", scrw / 2, y, str, color)
+
+		if vars.window then
+			drawing_window = true
+			local x = scrw * .02
+			local y = scrh * .25
+
+			local w = scrw * .3
+			local h = scrh * .3
+
+			render.RenderView({
+				origin = target.ent:EyePos(),
+				angles = target.ent:EyeAngles(),
+				x = x, y = y,
+				w = w, h = h,
+				fov = GetFOV(),
+				drawviewmodel = false,
+				drawviewer = true,
+			})
+			drawing_window = false
+		end
 	end
 
 	local tr = util.TraceLine({
@@ -743,8 +826,8 @@ local function GetCalcViewData(ply, pos, ang, fov)
 		mouse.cam = mouse.cam + mouse.velocity * RealFrameTime()
 		mouse.velocity:Zero()
 		return { origin = mouse.cam, angles = mouse.ang, fov = fov, drawviewer = true }
-	elseif vars.spectate then
-		return { origin = GetEyePos(), angles = GetEyeAngles(), fov = fov, drawviewer = true }
+	elseif vars.spectate and not vars.window then
+		return { origin = GetEyePos(), angles = GetEyeAngles(), fov = GetFOV(), drawviewer = true }
 	end
 
 	if vars.thirdperson then
@@ -772,7 +855,7 @@ end
 hook.Add("CalcView", "demo_calc_view", CalcView)
 
 local function DrawOutlines()
-	if not vars.outline:GetBool() then return end
+	if drawing_window or not vars.outline:GetBool() then return end
 
 	local target = GetTarget()
 	local range = vars.range:GetInt() ^ 2
@@ -795,7 +878,12 @@ hook.Add("PreDrawHalos", "demo_draw_outlines", DrawOutlines)
 
 -- Don't draw the spectatee (if that's even a real word)
 local function PrePlayerDraw(ply)
-	if vars.spectate and not vars.thirdperson and IsValid(target.ent) and target.ent == ply then
+	-- render.RenderView pretty much renders the game again. If we didn't have this here, it would draw the target entity's clothings and player model
+	if drawing_window and ply == target.ent then
+		return true
+	end
+
+	if vars.spectate and not vars.window and not vars.thirdperson and IsValid(target.ent) and target.ent == ply then
 		return true
 	end
 end
@@ -876,7 +964,6 @@ end
 -- Calling vgui.Create makes a copy of the control table. This resets most menus.
 ResetUI()
 
--- TODO: Should we also allow scoreboard to show if disable UIs is turned off?
 function GAMEMODE:ScoreboardShow() end
 function GAMEMODE:ScoreboardHide() end
 
@@ -916,4 +1003,9 @@ function PLAYER:GetBleedingAmount()
 
 	return player_GetBleedingAmount(self)
 end
+
+if is_playing_demo then
+	RunConsoleCommand("demo_pause")
+end
+
 
