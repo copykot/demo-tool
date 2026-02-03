@@ -1,3 +1,13 @@
+### Changes for v1.2.0:
+- Added optional job titles to ESP
+- Added an optional demo timer (e.g.: 0:10 / 59:59)
+- Added an optional crosshair
+- Added a toggle to draw a window with the spectatee's view (M2 -> Spectate -> Toggle window)
+- Added a feature to replicate scope zoom when spectating someone
+- Added "stopsound" to the demo menu
+- Fixed a typo in ESP
+
+
 ### Changes for v1.1.0:
 - ESP now automatically hides uninteresting information, such as: holding keys, 100/100 HP or armour, etc.
 - Added all warrant types to ESP
