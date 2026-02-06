@@ -18,7 +18,7 @@ Go over to Steam -> Library and find Garry's Mod. Then right click -> Manage -> 
 Once you're in a demo, type in console `sv_allowcslua 1` followed by `lua_openscript_cl dem.lua`.
 
 ## FAQ
-What is a dormant player? When a player is dormant, the client does receive updates regarding most of their information.
+What is a dormant player? When a player is dormant, the client doesn't receive updates regarding most of their information.
 
 I see overlapping text that is different to the screenshots: You probably have `perp_esp` set to 1.
 
