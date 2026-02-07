@@ -89,7 +89,6 @@ end
 -- utils
 local drawing_window = false
 local is_playing_demo = engine.IsPlayingDemo()
-local total_demo_time = string.ToMinutesSeconds(engine.GetDemoPlaybackTotalTicks() * engine.TickInterval())
 
 local function ScaleSize(size)
 	return size * (ScrW() / 2560)
@@ -344,27 +343,84 @@ concommand.Add("_demo_gui", ToggleDemoGUI)
 
 local m
 local function SpectateSearch()
-	m = vgui.Create("DFrame")
-	m:SetTitle("Enter Steam ID")
-	m:SetSize(ScaleSize(250), ScaleSize(100))
-	m:Center()
-	m:MakePopup()
+	local menu = vgui.Create("DFrame")
+	menu:SetTitle("Search player")
+	menu:SetSize(ScaleSize(500), ScaleSize(650))
+	menu:Center()
+	menu:MakePopup()
 
-	local text = vgui.Create("DTextEntry", m)
-
-	local w, h = m:GetSize()
-	local dock = ScaleSize(15)
-	text:Dock(FILL)
-	text:DockMargin(dock, dock * 1.25, dock, dock * 1.25)
-
-	text:AllowInput(true)
-	text.OnEnter = function(self, value)
-		local ply = player.GetBySteamID(value)
-		if ply then
-			SpectatePlayer(ply)
+	menu.text = vgui.Create("DTextEntry", menu)
+	menu.text:Dock(TOP)
+	menu.text:SetUpdateOnType(true)
+	menu.text.OnValueChange = function(_, value)
+		for i, button in ipairs(menu.buttons) do
+			button:Remove()
 		end
 
-		m:Close()
+		menu.buttons = {}
+
+		local needle = value:lower()
+		if needle == "" then
+			return
+		end
+
+		for i, ply in player.Iterator() do
+			if ply == LocalPlayer() then continue end
+			local name = FormatPlayerName(ply)
+			if string.find(name:lower(), needle, 1, true) == nil then continue end
+
+			local str = ""
+			local color = color_white
+			if not ply:Alive() then
+				str = " (dead)"
+				color = Color(200, 200, 200, 255)
+			elseif ply:IsDormant() then
+				str = " (dormant)"
+				color = Color(150, 150, 150, 255)
+			end
+
+			local j = table.insert(menu.buttons, vgui.Create("DButton", menu.scroll))
+			local button = menu.buttons[j]
+			button:SetText(name .. str)
+			button:SetSize(ScaleSize(475), ScaleSize(25))
+			button:SetContentAlignment(4)
+			button:SetPos(10, (25 * #menu.buttons) - 20)
+
+			button:SetTextColor(color)
+			button:SetPaintBorderEnabled(false)
+			button:SetPaintBackground(false)
+			button.DoClick = function()
+				SpectatePlayer(ply)
+				menu:Remove()
+			end
+		end
+	end
+
+	menu.text.OnEnter = function()
+		if #menu.buttons > 0 then
+			menu.buttons[1]:DoClick()
+		end
+	end
+
+	menu.scroll = vgui.Create("DScrollPanel", menu)
+	menu.scroll:Dock(FILL)
+	menu.buttons = {}
+end
+
+local function OpenModal(prompt, action)
+	local menu = vgui.Create("DFrame")
+	menu:SetTitle(prompt)
+	menu:SetSize(ScaleSize(250), ScaleSize(100))
+	menu:Center()
+	menu:MakePopup()
+
+	-- @type DTextEntry
+	local text = vgui.Create("DTextEntry", menu)
+	text:Dock(TOP)
+
+	text.OnEnter = function(_, value)
+		action(value)
+		menu:Close()
 	end
 end
 
@@ -373,7 +429,7 @@ local function ToggleThirdPerson()
 	ResetUI()
 end
 
-local function InitDemoPanel(ply, bind, pressed, code)
+local function InitDemoPanel(_, bind, pressed, code)
 	if not pressed or code ~= MOUSE_RIGHT then return end
 
 	m = DermaMenu()
@@ -388,7 +444,19 @@ local function InitDemoPanel(ply, bind, pressed, code)
 
 	local list = spec:AddSubMenu("Nearby")
 	PopulateCombobox(list, function(ply) SpectatePlayer(ply) end)
-	spec:AddOption("By Steam ID", SpectateSearch)
+	spec:AddOption("Search", SpectateSearch)
+
+	--[[
+	spec:AddOption("By Steam ID", function()
+		OpenModal("Enter Steam ID:", function(value)
+			local ply = player.GetBySteamID(value)
+			if ply then
+				SpectatePlayer(ply)
+			end
+		end)
+	end)
+	]]
+
 	spec:AddOption("Toggle window", ToggleWindow)
 
 	-- Demo
@@ -399,6 +467,17 @@ local function InitDemoPanel(ply, bind, pressed, code)
 		local timescale = demo:AddSubMenu("Timescale")
 		demo:AddOption("Open demoui", function() RunConsoleCommand("demoui") end)
 		demo:AddOption("stopsound", function() RunConsoleCommand("stopsound") end)
+		demo:AddOption("Seek to time", function()
+			OpenModal("Enter time MM:SS", function(value)
+				local min, sec = string.match(value, "(%d+):(%d+)")
+				if min ~= nil and sec ~= nil then
+					local total_seconds = min * 60 + sec
+					local tps = 1 / engine.TickInterval()
+					local tick = total_seconds * tps
+					RunConsoleCommand("demo_gototick", tostring(math.floor(tick)))
+				end
+			end)
+		end)
 
 		timescale:AddOption("0.1x", function() RunConsoleCommand("demo_timescale", "0.1") end)
 		timescale:AddOption("0.25x", function() RunConsoleCommand("demo_timescale", "0.25") end)
@@ -434,7 +513,7 @@ local function InitDemoPanel(ply, bind, pressed, code)
 			if tr.Entity:IsRagdoll() then
 				-- I don't know how to get the owner of a ragdoll, soz
 			elseif tr.Entity:IsVehicle() then
-				ply = ply:GetNWEntity("owner", nil)
+				ply = tr.Entity:GetNWEntity("owner", nil)
 			end
 		end
 
@@ -502,7 +581,6 @@ local function DrawClientESP(ply)
 	local color = team.GetColor(ply:Team())
 	local c = ply:WorldSpaceCenter():ToScreen()
 
-
 	if not player_Alive(ply) then
 		if vars.alive_only:GetBool() then return end
 
@@ -512,10 +590,11 @@ local function DrawClientESP(ply)
 		end
 	end
 
-	local yoffset = -ScaleSize(20)
+	local base = ScaleSize(20)
+	local yoffset = -base
 	if vars.show_rpname:GetBool()  then
 		DrawText(font, c.x, c.y + yoffset, ply:GetRPName(), color)
-		yoffset = yoffset + ScaleSize(20)
+		yoffset = yoffset + base
 	end
 
 	local player_name = ply:Nick()
@@ -525,11 +604,11 @@ local function DrawClientESP(ply)
 	end
 
 	DrawText(font, c.x, c.y + yoffset, player_name, color)
-	yoffset = yoffset + ScaleSize(20)
+	yoffset = yoffset + base
 
 	if vars.show_steamid:GetBool()	then
 		DrawText(font, c.x, c.y + yoffset, ply:SteamID(), color)
-		yoffset = yoffset + ScaleSize(20)
+		yoffset = yoffset + base
 	end
 
 	if vars.show_health:GetBool() then
@@ -553,7 +632,7 @@ local function DrawClientESP(ply)
 
 		if str ~= "" then
 			DrawText(font, c.x, c.y + yoffset, str, color)
-			yoffset = yoffset + ScaleSize(20)
+			yoffset = yoffset + base
 		end
 	end
 
@@ -578,7 +657,7 @@ local function DrawClientESP(ply)
 
 		if #text > 0 then
 			DrawText(font, c.x, c.y + yoffset, table.concat(text, ", "), Color(255, 50, 50, 255))
-			yoffset = yoffset + ScaleSize(20)
+			yoffset = yoffset + base
 		end
 	end
 
@@ -593,13 +672,13 @@ local function DrawClientESP(ply)
 		end
 
 		DrawText(font, c.x, c.y + yoffset, str, Color(255, 50, 50, 255))
-		yoffset = yoffset + ScaleSize(20)
+		yoffset = yoffset + base
 	end
 
 	-- Untested, not sure if this works correctly
 	if ply:GetNWBool("InEvent", false) then
 		DrawText(font, c.x, c.y + yoffset, "Event player", Color(200, 200, 100, 255))
-		yoffset = yoffset + ScaleSize(20)
+		yoffset = yoffset + base
 	end
 
 	if vars.show_weapon:GetBool() then
@@ -617,29 +696,31 @@ local function DrawClientESP(ply)
 
 		if str then
 			DrawText(font, c.x, c.y + yoffset, str, restrained and Color(255, 175, 100, 255) or color)
-			yoffset = yoffset + ScaleSize(20)
+			yoffset = yoffset + base
 		end
 	end
 end
 
 local function DrawVehicleESP(ent, hovered)
 	if not vars.vehicles:GetBool() then return end
+
 	local font = "demo_mtext"
 	local c = ent:WorldSpaceCenter():ToScreen()
 	local color = color_white
 
-	local yoffset = -ScaleSize(20)
+	local base = ScaleSize(20)
+	local yoffset = -base
 
 	local owner = ent:GetNWEntity("owner", nil)
 	if hovered and IsValid(owner) and owner:IsPlayer() then
 		DrawText("demo_text", c.x, c.y + yoffset, "Owned by " .. FormatPlayerName(owner), color)
-		yoffset = yoffset + ScaleSize(20)
+		yoffset = yoffset + base
 	end
 
 	local health = ent:Health()
 	if vars.show_health:GetBool() and health > 0 and health ~= ent:GetMaxHealth() then
 		DrawText(font, c.x, c.y + yoffset, health .. " HP", color)
-		yoffset = yoffset + ScaleSize(20)
+		yoffset = yoffset + base
 	end
 
 	local velocity = ent:GetVelocity():Length()
@@ -647,7 +728,7 @@ local function DrawVehicleESP(ent, hovered)
 		local speed = math.Round(velocity / 17.6)
 
 		DrawText(font, c.x, c.y + yoffset, tostring(speed) .. " MPH", color)
-		yoffset = yoffset + ScaleSize(20)
+		yoffset = yoffset + base
 	end
 end
 
@@ -664,6 +745,15 @@ local function GetKeyCode(str, default)
 	return default
 end
 
+local allow_keyboard = true
+hook.Add("OnTextEntryGetFocus", "demo_get_focus", function()
+	allow_keyboard = false
+end)
+
+hook.Add("OnTextEntryLoseFocus", "demo_lose_focus", function()
+	allow_keyboard = true
+end)
+
 player_Alive = player_Alive or PLAYER.Alive
 local function HUDPaintESP()
 	local scrw = ScrW()
@@ -678,7 +768,8 @@ local function HUDPaintESP()
 
 	if is_playing_demo and vars.time:GetBool() then
 		local time = string.ToMinutesSeconds(engine.GetDemoPlaybackTick() * engine.TickInterval())
-		DrawText("demo_info_big", scrw * .92, scrw * .05, time .. " / " .. total_demo_time, color_white)
+		local total = string.ToMinutesSeconds(engine.GetDemoPlaybackTotalTicks() * engine.TickInterval())
+		DrawText("demo_info_big", scrw * .92, scrw * .05, time .. " / " .. total, color_white)
 	end
 
 	if vars.crosshair:GetBool() then
@@ -714,23 +805,26 @@ local function HUDPaintESP()
 			input.SetCursorPos(cx, cy)
 		end
 
-		local speed = 450
-		if input.IsKeyDown(GetKeyCode("+speed", KEY_LSHIFT)) then speed = speed * 2 end
-		if input.IsKeyDown(GetKeyCode("+walk", KEY_LSHIFT)) then speed = speed / 2 end
+		-- Don't move in noclip when we're typing something
+		if allow_keyboard then
+			local speed = 450
+			if input.IsKeyDown(GetKeyCode("+speed", KEY_LSHIFT)) then speed = speed * 2 end
+			if input.IsKeyDown(GetKeyCode("+walk", KEY_LSHIFT)) then speed = speed / 2 end
 
-		-- Perhaps a version of this using GetKeyCode for everything would've been better.
-		-- Although, it won't be ideal for people that use nulls or similar aliases
-		local forward = mouse.ang:Forward()
-		if input.IsKeyDown(KEY_W) then mouse.velocity = mouse.velocity + forward * speed end
-		if input.IsKeyDown(KEY_S) then mouse.velocity = mouse.velocity - forward * speed end
+			-- Perhaps a version of this using GetKeyCode for everything would've been better.
+			-- Although, it won't be ideal for people that use nulls or similar aliases
+			local forward = mouse.ang:Forward()
+			if input.IsKeyDown(KEY_W) then mouse.velocity = mouse.velocity + forward * speed end
+			if input.IsKeyDown(KEY_S) then mouse.velocity = mouse.velocity - forward * speed end
 
-		local right = mouse.ang:Right()
-		if input.IsKeyDown(KEY_D) then mouse.velocity = mouse.velocity + right * speed end
-		if input.IsKeyDown(KEY_A) then mouse.velocity = mouse.velocity - right * speed end
+			local right = mouse.ang:Right()
+			if input.IsKeyDown(KEY_D) then mouse.velocity = mouse.velocity + right * speed end
+			if input.IsKeyDown(KEY_A) then mouse.velocity = mouse.velocity - right * speed end
 
-		local up = Vector(0, 0, 1.25) -- Allow going up when holding space, looking straight down, and moving forward
-		if input.IsKeyDown(KEY_SPACE) then mouse.velocity = mouse.velocity + up * speed end
-		if input.IsKeyDown(GetKeyCode("+duck", KEY_LCONTROL)) then mouse.velocity = mouse.velocity - up * speed end
+			local up = Vector(0, 0, 1.25) -- Allow going up when holding space, looking straight down, and moving forward
+			if input.IsKeyDown(KEY_SPACE) then mouse.velocity = mouse.velocity + up * speed end
+			if input.IsKeyDown(GetKeyCode("+duck", KEY_LCONTROL)) then mouse.velocity = mouse.velocity - up * speed end
+		end
 	end
 
 	-- Print spectator info
