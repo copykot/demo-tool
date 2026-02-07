@@ -1,3 +1,7 @@
+### Changes for v1.3.0:
+- Added a semi-fuzzy search panel to the spectator sub-menu (M2 -> Spectate -> Search). This has fully replaced the "Find by Steam ID" option.
+- Added a "Seek to time" panel in the demo sub-menu (M2 -> Demo -> Seek to time).
+
 ### Changes for v1.2.0:
 - Added optional job titles to ESP
 - Added an optional demo timer (e.g.: 0:10 / 59:59)
