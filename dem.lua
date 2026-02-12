@@ -6,7 +6,6 @@ if SERVER then
 end
 
 local PLAYER = FindMetaTable("Player")
-local ENTITY = FindMetaTable("Entity")
 
 local color_white = Color(255, 255, 255, 255)
 local color_black = Color(0, 0, 0, 255)
@@ -27,6 +26,7 @@ local vars = {
 	show_warrant = CreateClientConVar("_demo_esp_show_warrant", "0", true, false),
 	show_status = CreateClientConVar("_demo_esp_show_status", "0", true, false),
 	show_jobs = CreateClientConVar("_demo_esp_show_jobs", "0", true, false),
+	show_nlr = CreateClientConVar("_demo_esp_show_nlr", "0", true, false),
 
 	outline = CreateClientConVar("_demo_esp_draw_outline", "0", true, false),
 	range = CreateClientConVar("_demo_esp_range", "1000", true, false),
@@ -36,9 +36,11 @@ local vars = {
 	disable_uis = CreateClientConVar("_demo_disable_uis", "1", true, false),
 	crosshair = CreateClientConVar("_demo_crosshair", "0", true, false),
 	zoom = CreateClientConVar("_demo_zoom", "0", true, false),
+	window = CreateClientConVar("_demo_window", "0", true, false),
+	voice_list = CreateClientConVar("_demo_voice_list", "0", true, false),
+	fast_forward = CreateClientConVar("_demo_ff_key", "0", true, false),
 
 	-- No point in saving these to the config
-	window = false,
 	focuslock = jit.os ~= "Windows",
 	spectate = false,
 	noclip = false,
@@ -69,12 +71,16 @@ local mouse = {
 }
 
 -- Allows the gamemode to show the player's RP name above their head normally
-function PLAYER:GetRPName()
+function PLAYER:GetRPName(custom)
 	local first = self:GetNWString("rp_fname", -1)
 	local surname = self:GetNWString("rp_lname", -1)
 
 	if first == -1 or surname == -1 then
-		return "John Doe"
+		return self:Nick()
+	end
+
+	if not custom then
+		return string.format("%s %s (%s)", first, surname, self:Nick())
 	end
 
 	return first .. " " .. surname
@@ -96,7 +102,7 @@ end
 
 -- In hindsight, this should've been called GetLocal instead
 local function GetTarget()
-	if vars.spectate and not vars.window and IsValid(target.ent) then
+	if vars.spectate and not vars.window:GetBool() and IsValid(target.ent) then
 		return target.ent
 	end
 
@@ -154,7 +160,7 @@ local function SpectatePlayer(ply)
 		target.idx = ply:EntIndex()
 		vars.spectate = true
 
-		if not vars.window then
+		if not vars.window:GetBool() then
 			vars.noclip = false
 		end
 
@@ -177,7 +183,7 @@ local function ToggleDemoNoclip()
 		-- We wish to start from whatever POV we were in previously.
 		ResetMouseData()
 
-		if not vars.window then
+		if not vars.window:GetBool() then
 			StopSpectating()
 		end
 	end
@@ -188,7 +194,7 @@ end
 concommand.Add("_demo_toggle_noclip", ToggleDemoNoclip)
 
 local function ToggleWindow()
-	vars.window = not vars.window
+	vars.window:SetBool(not vars.window:GetBool())
 
 	if vars.spectate then
 		vars.noclip = false
@@ -196,14 +202,13 @@ local function ToggleWindow()
 end
 
 local function FormatPlayerName(ply)
-	return string.format("%s (%s, %s)", ply:GetRPName(), ply:Nick(), ply:SteamID())
+	return string.format("%s (%s, %s)", ply:GetRPName(true), ply:Nick(), ply:SteamID())
 end
 
 -- A function is only provided when a DMenu sub menu wishes to be populated
 local function PopulateCombobox(combo, func)
 	if not func then combo:Clear() end
 
-	local localplayer = LocalPlayer()
 	local t = player.GetAll()
 
 	local pos = GetEyePos()
@@ -211,12 +216,12 @@ local function PopulateCombobox(combo, func)
 		return pos:DistToSqr(a:GetPos()) < pos:DistToSqr(b:GetPos())
 	end)
 
-	for i, ply in ipairs(t) do
+	for _, ply in ipairs(t) do
 		if ply == LocalPlayer() then continue end
 		local str = ply:IsDormant() and " (dormant)" or ""
 
 		if func then
-			if not ply:IsDormant() then
+			if not ply:IsDormant() and ply:Alive() then
 				combo:AddOption(FormatPlayerName(ply) .. str, function() func(ply) end)
 			end
 		else
@@ -235,6 +240,7 @@ local _gui_data = {
 	{ type = "slider",	 label = "Thirdperson distance", var = vars.fov, min = 10, max = 150 },
 	{ type = "checkbox", label = "Show RP name", var = vars.show_rpname },
 	{ type = "checkbox", label = "Show job rank", var = vars.show_jobs },
+	{ type = "checkbox", label = "Show NLR", var = vars.show_nlr },
 	{ type = "checkbox", label = "Show Steam ID", var = vars.show_steamid },
 	{ type = "checkbox", label = "Show health info", var = vars.show_health },
 	{ type = "checkbox", label = "Show weapon", var = vars.show_weapon },
@@ -242,9 +248,11 @@ local _gui_data = {
 	{ type = "checkbox", label = "Show warrant", var = vars.show_warrant },
 	{ type = "checkbox", label = "Draw time", var = vars.time },
 	{ type = "checkbox", label = "Replicate scope zoom when spectating", var = vars.zoom },
+	{ type = "checkbox", label = "Voice proximity list", var = vars.voice_list },
 	{ type = "checkbox", label = "Draw crosshair", var = vars.crosshair },
 	{ type = "checkbox", label = "Show console kill logs", var = vars.logs },
 	{ type = "checkbox", label = "Disable UIs", var = vars.disable_uis },
+	{ type = "keybind",	 label = "Fast forward keybind", var = vars.fast_forward },
 }
 
 local _demo_gui
@@ -266,7 +274,7 @@ local function ToggleDemoGUI()
 	sp:Dock(FILL)
 	sp:DockMargin(0,30,0,0)
 
-	for i, data in ipairs(_gui_data) do
+	for _, data in ipairs(_gui_data) do
 		if data.type == "button" and data.click then
 			local button = vgui.Create("DButton", sp)
 			button:SetText(data.label)
@@ -274,9 +282,8 @@ local function ToggleDemoGUI()
 			button:SizeToContents()
 			button.DoClick = data.click
 
-			local x, y = button:GetSize()
+			local _, y = button:GetSize()
 			yoffset = yoffset + y
-
 		elseif data.type == "checkbox" and data.var then
 			local checkbox = vgui.Create("DCheckBoxLabel", sp)
 			checkbox:SetText(data.label)
@@ -284,9 +291,8 @@ local function ToggleDemoGUI()
 			checkbox:SetConVar(data.var:GetName())
 			checkbox:SizeToContents()
 
-			local x, y = checkbox:GetSize()
+			local _, y = checkbox:GetSize()
 			yoffset = yoffset + y
-
 		elseif data.type == "slider" and data.var then
 			local slider = vgui.Create("DNumSlider", sp)
 			slider:SetText(data.label)
@@ -297,7 +303,27 @@ local function ToggleDemoGUI()
 			slider:SetDecimals(0)
 			slider:SetWidth(300)
 
-			local x, y = slider:GetSize()
+			local _, y = slider:GetSize()
+			yoffset = yoffset + y
+		elseif data.type == "keybind" and data.var then
+			local label = vgui.Create("DLabel", sp)
+			label:SetPos(0, yoffset)
+			label:SetText(data.label)
+			label:SizeToContents()
+
+			local _, y = label:GetSize()
+			yoffset = yoffset + y
+
+			local bind = vgui.Create("DBinder", sp)
+			bind:SetPos(0, yoffset)
+			bind:SetSize(ScaleSize(70), ScaleSize(28))
+			bind:SetValue(data.var:GetInt())
+
+			bind.OnChange = function(self, num)
+				data.var:SetInt(num)
+			end
+
+			_, y = bind:GetSize()
 			yoffset = yoffset + y
 		end
 	end
@@ -353,18 +379,14 @@ local function SpectateSearch()
 	menu.text:Dock(TOP)
 	menu.text:SetUpdateOnType(true)
 	menu.text.OnValueChange = function(_, value)
-		for i, button in ipairs(menu.buttons) do
+		for _, button in ipairs(menu.buttons) do
 			button:Remove()
 		end
 
 		menu.buttons = {}
 
 		local needle = value:lower()
-		if needle == "" then
-			return
-		end
-
-		for i, ply in player.Iterator() do
+		for _, ply in player.Iterator() do
 			if ply == LocalPlayer() then continue end
 			local name = FormatPlayerName(ply)
 			if string.find(name:lower(), needle, 1, true) == nil then continue end
@@ -429,6 +451,12 @@ local function ToggleThirdPerson()
 	ResetUI()
 end
 
+local base_timescale = 1
+local function SetTimescale(speed)
+	base_timescale = speed
+	RunConsoleCommand("demo_timescale", speed)
+end
+
 local function InitDemoPanel(_, bind, pressed, code)
 	if not pressed or code ~= MOUSE_RIGHT then return end
 
@@ -479,17 +507,17 @@ local function InitDemoPanel(_, bind, pressed, code)
 			end)
 		end)
 
-		timescale:AddOption("0.1x", function() RunConsoleCommand("demo_timescale", "0.1") end)
-		timescale:AddOption("0.25x", function() RunConsoleCommand("demo_timescale", "0.25") end)
-		timescale:AddOption("0.5x", function() RunConsoleCommand("demo_timescale", "0.5") end)
-		timescale:AddOption("0.75x", function() RunConsoleCommand("demo_timescale", "0.75") end)
-		timescale:AddOption("1x / reset", function() RunConsoleCommand("demo_timescale", "1") end)
-		timescale:AddOption("2x", function() RunConsoleCommand("demo_timescale", "2") end)
-		timescale:AddOption("3x", function() RunConsoleCommand("demo_timescale", "3") end)
-		timescale:AddOption("4x", function() RunConsoleCommand("demo_timescale", "4") end)
-		timescale:AddOption("5x", function() RunConsoleCommand("demo_timescale", "5") end)
-		timescale:AddOption("7.5x", function() RunConsoleCommand("demo_timescale", "7.5") end)
-		timescale:AddOption("10x", function() RunConsoleCommand("demo_timescale", "10") end)
+		timescale:AddOption("0.1x", function() SetTimescale(0.1) end)
+		timescale:AddOption("0.25x", function() SetTimescale(0.25) end)
+		timescale:AddOption("0.5x", function() SetTimescale(0.5) end)
+		timescale:AddOption("0.75x", function() SetTimescale(0.75) end)
+		timescale:AddOption("1x / reset", function() SetTimescale(1) end)
+		timescale:AddOption("2x", function() SetTimescale(2) end)
+		timescale:AddOption("3x", function() SetTimescale(3) end)
+		timescale:AddOption("4x", function() SetTimescale(4) end)
+		timescale:AddOption("5x", function() SetTimescale(5) end)
+		timescale:AddOption("7.5x", function() SetTimescale(7.5) end)
+		timescale:AddOption("10x", function() SetTimescale(10) end)
 	end
 
 	-- Voice
@@ -510,11 +538,7 @@ local function InitDemoPanel(_, bind, pressed, code)
 
 		local ply = tr.Entity
 		if IsValid(tr.Entity) and not tr.Entity:IsPlayer() then
-			if tr.Entity:IsRagdoll() then
-				-- I don't know how to get the owner of a ragdoll, soz
-			elseif tr.Entity:IsVehicle() then
-				ply = tr.Entity:GetNWEntity("owner", nil)
-			end
+			ply = tr.Entity:GetNWEntity("owner", nil)
 		end
 
 		if IsValid(ply) and ply:IsPlayer() and ply ~= LocalPlayer() then
@@ -569,31 +593,36 @@ surface.CreateFont("demo_info_big", {
 })
 
 
-local function DrawText(font, x, y, text, color)
-	draw.SimpleTextOutlined(text, font, x, y, color, TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER, 1, Color(0, 0, 0, color.a))
+local function DrawText(font, x, y, text, color, align)
+	align = align or TEXT_ALIGN_CENTER
+	return draw.SimpleTextOutlined(text, font, x, y, color, align, TEXT_ALIGN_CENTER, 1, Color(0, 0, 0, color.a))
 end
 
+player_Alive = player_Alive or PLAYER.Alive
 player_GetBloodLevel = player_GetBloodLevel or PLAYER.GetBloodLevel
 player_GetBleedingAmount = player_GetBleedingAmount or PLAYER.GetBleedingAmount
 
 local function DrawClientESP(ply)
 	local font = "demo_mtext"
 	local color = team.GetColor(ply:Team())
-	local c = ply:WorldSpaceCenter():ToScreen()
+	local c = ply:GetPos():ToScreen()
 
-	if not player_Alive(ply) then
-		if vars.alive_only:GetBool() then return end
+	local base = ScaleSize(20)
+	local yoffset = 0
+
+	local alive = player_Alive(ply)
+	if not alive then
+		if vars.alive_only:GetBool() and not ply:CanBeRevived() then return end
 
 		local ragdoll = ply:GetNWEntity("ragdoll", nil)
 		if IsValid(ragdoll) then
 			c = ragdoll:WorldSpaceCenter():ToScreen()
+			yoffset = -base
 		end
 	end
 
-	local base = ScaleSize(20)
-	local yoffset = -base
-	if vars.show_rpname:GetBool()  then
-		DrawText(font, c.x, c.y + yoffset, ply:GetRPName(), color)
+	if vars.show_rpname:GetBool() then
+		DrawText(font, c.x, c.y + yoffset, ply:GetRPName(true), color)
 		yoffset = yoffset + base
 	end
 
@@ -606,7 +635,7 @@ local function DrawClientESP(ply)
 	DrawText(font, c.x, c.y + yoffset, player_name, color)
 	yoffset = yoffset + base
 
-	if vars.show_steamid:GetBool()	then
+	if vars.show_steamid:GetBool() then
 		DrawText(font, c.x, c.y + yoffset, ply:SteamID(), color)
 		yoffset = yoffset + base
 	end
@@ -614,7 +643,8 @@ local function DrawClientESP(ply)
 	if vars.show_health:GetBool() then
 		local str = ""
 
-		if player_Alive(ply) then
+		local col = color
+		if alive then
 			if ply:Health() > 0 and ply:Health() ~= ply:GetMaxHealth() then
 				str = ply:Health() .. " HP"
 			end
@@ -628,22 +658,31 @@ local function DrawClientESP(ply)
 			else
 				str = "Dead"
 			end
+
+			col = Color(255, 50, 50, 255)
 		end
 
 		if str ~= "" then
-			DrawText(font, c.x, c.y + yoffset, str, color)
+			DrawText(font, c.x, c.y + yoffset, str, col)
 			yoffset = yoffset + base
 		end
 	end
 
 	if vars.show_status:GetBool() then
-		local alive = player_Alive(ply)
 		local crippled = ply:GetNWBool("crippled")
 		local splint = ply:GetNWBool("hasSplint")
 
 		local text = {}
 		if (crippled or splint) and alive then
-			table.insert(text, crippled and "Crippled" or "Splinted")
+			table.insert(text, crippled and "crippled" or "splinted")
+		end
+
+		if player_GetBleedingAmount(ply) > 0 and alive then
+			table.insert(text, "bleeding")
+		end
+
+		if ply:GetNWFloat("FLASHED", 0) > CurTime() and alive then
+			table.insert(text, "flashed")
 		end
 
 		local last_shot = ply:GetNWFloat("LastShot", nil)
@@ -651,12 +690,17 @@ local function DrawClientESP(ply)
 			table.insert(text, "shot")
 		end
 
-		if player_GetBleedingAmount(ply) > 0 and alive then
-			table.insert(text, "bleeding")
+		if ply:GetNWBool("PhoneCall", false) then
+			table.insert(text, "call")
+		elseif ply:GetNWBool("TeamSpeak", false) then
+			table.insert(text, "TS")
 		end
 
 		if #text > 0 then
-			DrawText(font, c.x, c.y + yoffset, table.concat(text, ", "), Color(255, 50, 50, 255))
+			local str = table.concat(text, ", ")
+			str = str:sub(1, 1):upper() .. str:sub(2) -- Make the first letter uppercase
+
+			DrawText(font, c.x, c.y + yoffset, str, Color(255, 50, 50, 255))
 			yoffset = yoffset + base
 		end
 	end
@@ -666,7 +710,7 @@ local function DrawClientESP(ply)
 	local bolo = ply:HasBolo()
 	local robber = ply:GetNWBool("robber", false)
 	if vars.show_warrant:GetBool() and (search or warranted or bolo or robber) then
-		local str = robber and "Bank Robber" or "Warranted"
+		local str = robber and "Robber" or "Warranted"
 		if search or bolo then
 			str = search and "Search warrant" or "BOLO"
 		end
@@ -695,7 +739,18 @@ local function DrawClientESP(ply)
 		end
 
 		if str then
-			DrawText(font, c.x, c.y + yoffset, str, restrained and Color(255, 175, 100, 255) or color)
+			DrawText(font, c.x, c.y + yoffset, str, Color(255, 175, 100, 255))
+			yoffset = yoffset + base
+		end
+	end
+
+	if vars.show_nlr:GetBool() then
+		local time = ply:GetNWFloat("NLRTime", 0)
+		if time > CurTime() and ply:IsEntityInNLRZone(ply) then
+			-- No idea how to get the NLR zone's name
+			local str = "NLR: " .. string.ToMinutesSeconds(time - CurTime())
+
+			DrawText(font, c.x, c.y + yoffset, str, Color(255, 0, 0, 255))
 			yoffset = yoffset + base
 		end
 	end
@@ -754,7 +809,8 @@ hook.Add("OnTextEntryLoseFocus", "demo_lose_focus", function()
 	allow_keyboard = true
 end)
 
-player_Alive = player_Alive or PLAYER.Alive
+local last_key_down = false
+
 local function HUDPaintESP()
 	local scrw = ScrW()
 	local scrh = ScrH()
@@ -765,6 +821,13 @@ local function HUDPaintESP()
 	if not player_Alive(LocalPlayer()) then
 		RunConsoleCommand("soundfade", "0", "0")
 	end
+
+	local key_down = vars.fast_forward:GetInt() ~= 0 and input.IsKeyDown(vars.fast_forward:GetInt()) or false
+	if key_down ~= last_key_down then
+		RunConsoleCommand("demo_timescale", base_timescale * (key_down and 2 or 1))
+	end
+
+	last_key_down = key_down
 
 	if is_playing_demo and vars.time:GetBool() then
 		local time = string.ToMinutesSeconds(engine.GetDemoPlaybackTick() * engine.TickInterval())
@@ -803,11 +866,15 @@ local function HUDPaintESP()
 			mouse.dx = mouse.dx + (x - cx)
 			mouse.dy = mouse.dy + (y - cy)
 			input.SetCursorPos(cx, cy)
+
+			local speed = 100 * 1 / math.max(1, math.Round(RealFrameTime() / engine.TickInterval()))
+			if input.IsKeyDown(GetKeyCode("+left", KEY_LEFT)) then mouse.dx = mouse.dx - speed end
+			if input.IsKeyDown(GetKeyCode("+right", KEY_RIGHT)) then mouse.dx = mouse.dx + speed end
 		end
 
 		-- Don't move in noclip when we're typing something
 		if allow_keyboard then
-			local speed = 450
+			local speed = 100
 			if input.IsKeyDown(GetKeyCode("+speed", KEY_LSHIFT)) then speed = speed * 2 end
 			if input.IsKeyDown(GetKeyCode("+walk", KEY_LSHIFT)) then speed = speed / 2 end
 
@@ -848,7 +915,7 @@ local function HUDPaintESP()
 
 		DrawText("demo_info_big", scrw / 2, y, str, color)
 
-		if vars.window then
+		if vars.window:GetBool() then
 			drawing_window = true
 			local x = scrw * .02
 			local y = scrh * .25
@@ -875,11 +942,29 @@ local function HUDPaintESP()
 		filter = GetTarget(),
 	})
 
+	if vars.voice_list:GetBool() then
+		local x = scrw * .99
+		local y = scrh * .35
+
+		local target = GetTarget()
+		local mode = target:GetNWInt("TalkMode", 1)
+		local base = ScaleSize(30)
+
+		DrawText("demo_info_big", x, y - base, string.format("Proximity list (%s)", mode == 2 and "whisper" or "normal"), color_white, TEXT_ALIGN_RIGHT)
+
+		for _, ply in player.Iterator() do
+			if not ply:Alive() or ply == target or not target:IsInChatRange(ply, mode == 2 and 3 or 1) then continue end
+
+			DrawText("demo_info_big", x, y, ply:Nick(), color_white, TEXT_ALIGN_RIGHT)
+			y = y + base
+		end
+	end
+
 	if vars.enabled:GetBool() then
 		local target = GetTarget()
 		local range = vars.range:GetInt() ^ 2
 
-		for i, ent in ents.Iterator() do
+		for _, ent in ents.Iterator() do
 			local ply = ent
 			if ent:IsPlayer() and not ply:IsDormant() and (vars.noclip or vars.thirdperson or ply ~= target) and GetEyePos():DistToSqr(ply:GetPos()) <= range then
 				DrawClientESP(ply)
@@ -902,7 +987,7 @@ local function UpdateMouseData()
 	mouse.dx = mouse.dx * mult
 	mouse.dy = mouse.dy * mult
 
-	-- Scale by time to 60 FPS. Demos call CalcView and HUDPaint more than normal
+	-- Demos call CalcView and HUDPaint more than normal
 	mouse.ang.y = mouse.ang.y - (mouse.yaw:GetFloat() * (mouse.dx * mouse.sens:GetFloat())) * scale
 	mouse.ang.p = math.Clamp(mouse.ang.p + (mouse.pitch:GetFloat() * (mouse.dy * mouse.sens:GetFloat())) * scale, -89, 89)
 	mouse.ang.r = 0 -- we don't want any roll
@@ -917,10 +1002,10 @@ local function GetCalcViewData(ply, pos, ang, fov)
 		UpdateMouseData()
 
 		-- Would've been cooler if CGameMovement::FullNoClipMove was implemented instead
-		mouse.cam = mouse.cam + mouse.velocity * RealFrameTime()
+		mouse.cam = mouse.cam + mouse.velocity * engine.TickInterval() -- RealFrameTime()
 		mouse.velocity:Zero()
 		return { origin = mouse.cam, angles = mouse.ang, fov = fov, drawviewer = true }
-	elseif vars.spectate and not vars.window then
+	elseif vars.spectate and not vars.window:GetBool() then
 		return { origin = GetEyePos(), angles = GetEyeAngles(), fov = GetFOV(), drawviewer = true }
 	end
 
@@ -953,11 +1038,12 @@ local function DrawOutlines()
 
 	local target = GetTarget()
 	local range = vars.range:GetInt() ^ 2
+	local pos = GetEyePos()
 
 	local teams = {}
-	for i, ply in player.Iterator() do
+	for _, ply in player.Iterator() do
 		-- We don't want to draw the outline for players who are dead. Their SetupBones does not correspond to their ragdoll's SetupBones and it looks weird.
-		if IsValid(ply) and player_Alive(ply) and not ply:IsDormant() and (vars.noclip or ply ~= target) and GetEyePos():DistToSqr(ply:GetPos()) <= range then
+		if IsValid(ply) and player_Alive(ply) and not ply:IsDormant() and (vars.noclip or ply ~= target) and pos:DistToSqr(ply:GetPos()) <= range then
 			local ply_team = ply:Team()
 			teams[ply_team] = teams[ply_team] or {}
 			table.insert(teams[ply_team], ply)
@@ -977,7 +1063,7 @@ local function PrePlayerDraw(ply)
 		return true
 	end
 
-	if vars.spectate and not vars.window and not vars.thirdperson and IsValid(target.ent) and target.ent == ply then
+	if vars.spectate and not vars.window:GetBool() and not vars.thirdperson and IsValid(target.ent) and target.ent == ply then
 		return true
 	end
 end
@@ -1019,7 +1105,6 @@ hook.Remove("RenderScreenspaceEffects", "StunEffect")
 ]]
 local overrides = {
 	"perp2_dialog",
-	"chemical_table_panel",
 	"ph_tv_menu",
 	"perpheads_act_wheel",
 	"perp_animation_hud",
@@ -1034,7 +1119,7 @@ local overrides = {
 }
 
 cached_overrides = cached_overrides or {}
-for i, s in ipairs(overrides) do
+for _, s in ipairs(overrides) do
 	local t = vgui.GetControlTable(s)
 	if not t then continue end
 
@@ -1062,7 +1147,7 @@ function GAMEMODE:ScoreboardShow() end
 function GAMEMODE:ScoreboardHide() end
 
 local function ShouldOverride(ply)
-	return ply == LocalPlayer() and (vars.noclip or (vars.spectate and IsValid(target.ent)) or vars.thirdperson)
+	return ply == LocalPlayer() and (vars.noclip or vars.spectate and IsValid(target.ent) or vars.thirdperson)
 end
 
 player_SetVoiceVolumeScale = player_SetVoiceVolumeScale or PLAYER.SetVoiceVolumeScale
