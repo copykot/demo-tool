@@ -1,3 +1,13 @@
+### Changes for v1.4.0:
+- Made ESP render below players, which massively improves visibility.
+- Added voice proximity list as an option. It shows a list of players who are able to hear the target player.
+- Added "flashed", "call", and teamspeak (shortened down to "TS") to the list of possible statuses in ESP
+- Added a fast-forward keybind in options. Holding the key makes demo playback twice as fast.
+- Added NLR to ESP. It only shows up if a player is in their NLR zone.
+- Added the player's Steam name to their RP name above their head.
+- Whilst in noclip/thirdperson, you can use +left / +right to slowly move the camera.
+- Made noclip speed consistent and (kind of) independent of frametime
+
 ### Changes for v1.3.0:
 - Added a semi-fuzzy search panel to the spectator sub-menu (M2 -> Spectate -> Search). This has fully replaced the "Find by Steam ID" option.
 - Added a "Seek to time" panel in the demo sub-menu (M2 -> Demo -> Seek to time).
