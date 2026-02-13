@@ -1,3 +1,13 @@
+### Changes for v1.5.0:
+- Added a keybinding system, with it an additional 4 keybinds:
+	- Cycle pause/resume
+    - Toggle third-person
+	- Toggle noclip
+	- Toggle third-person mouse control (can also by toggled via M2 -> Thirdperson -> Toggle mouse control)
+- Added an option to display a list of keybinds in the bottom right
+- Made it easier to read ESP text by changing order of colours depending on the player's job
+- Stopped that annoying ass dome from rendering
+
 ### Changes for v1.4.0:
 - Made ESP render below players, which massively improves visibility.
 - Added voice proximity list as an option. It shows a list of players who are able to hear the target player.
