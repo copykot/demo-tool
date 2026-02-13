@@ -38,7 +38,15 @@ local vars = {
 	zoom = CreateClientConVar("_demo_zoom", "0", true, false),
 	window = CreateClientConVar("_demo_window", "0", true, false),
 	voice_list = CreateClientConVar("_demo_voice_list", "0", true, false),
+	keybind_list = CreateClientConVar("_demo_keybind_list", "0", true, false),
+	mouse_control = CreateClientConVar("_demo_thirdperson_control", "0", true, false),
+
+	-- Keybinds
 	fast_forward = CreateClientConVar("_demo_ff_key", "0", true, false),
+	pause = CreateClientConVar("_demo_pause_key", "0", true, false),
+	thirdperson_key = CreateClientConVar("_demo_thirdperson_key", "0", true, false),
+	noclip_key = CreateClientConVar("_demo_noclip_key", "0", true, false),
+	mouse_control_key = CreateClientConVar("_demo_thirdperson_control_key", "0", true, false),
 
 	-- No point in saving these to the config
 	focuslock = jit.os ~= "Windows",
@@ -141,7 +149,11 @@ local function GetFOV()
 end
 
 local function ResetMouseData()
-	mouse.ang = GetEyeAngles()
+	-- We wish to retain viewangles when we enter noclip
+	if not vars.thirdperson then
+		mouse.ang = GetEyeAngles()
+	end
+
 	mouse.cam = GetEyePos()
 	mouse.dx = 0
 	mouse.dy = 0
@@ -201,6 +213,22 @@ local function ToggleWindow()
 	end
 end
 
+local function ToggleThirdPerson()
+	-- Snap back to the target's view if we're toggling thirdperson
+	ResetMouseData()
+
+	vars.thirdperson = not vars.thirdperson
+	ResetUI()
+end
+
+local function ToggleMouseControl()
+	vars.mouse_control:SetBool(not vars.mouse_control:GetBool())
+
+	if not vars.noclip and vars.thirdperson then
+		mouse.ang = GetEyeAngles()
+	end
+end
+
 local function FormatPlayerName(ply)
 	return string.format("%s (%s, %s)", ply:GetRPName(true), ply:Nick(), ply:SteamID())
 end
@@ -252,7 +280,12 @@ local _gui_data = {
 	{ type = "checkbox", label = "Draw crosshair", var = vars.crosshair },
 	{ type = "checkbox", label = "Show console kill logs", var = vars.logs },
 	{ type = "checkbox", label = "Disable UIs", var = vars.disable_uis },
+	{ type = "checkbox", label = "Show list of keybinds", var = vars.keybind_list },
 	{ type = "keybind",	 label = "Fast forward keybind", var = vars.fast_forward },
+	{ type = "keybind",	 label = "Toggle pause/resume keybind", var = vars.pause },
+	{ type = "keybind",	 label = "Toggle thirdperson keybind", var = vars.thirdperson_key },
+	{ type = "keybind",	 label = "Toggle thirdperson mouse control keybind", var = vars.mouse_control_key },
+	{ type = "keybind",	 label = "Toggle noclip keybind", var = vars.noclip_key },
 }
 
 local _demo_gui
@@ -446,11 +479,6 @@ local function OpenModal(prompt, action)
 	end
 end
 
-local function ToggleThirdPerson()
-	vars.thirdperson = not vars.thirdperson
-	ResetUI()
-end
-
 local base_timescale = 1
 local function SetTimescale(speed)
 	base_timescale = speed
@@ -464,7 +492,9 @@ local function InitDemoPanel(_, bind, pressed, code)
 	m:AddOption("None")
 	m:AddOption("Options", ToggleDemoGUI)
 	m:AddOption("Toggle noclip", ToggleDemoNoclip)
-	m:AddOption("Toggle thirdperson", ToggleThirdPerson)
+	local tp = m:AddSubMenu("Thirdperson")
+	tp:AddOption("Toggle", ToggleThirdPerson)
+	tp:AddOption("Toggle mouse control", ToggleMouseControl)
 
 	-- Spectate
 	local spec = m:AddSubMenu("Spectate")
@@ -527,13 +557,17 @@ local function InitDemoPanel(_, bind, pressed, code)
 	PopulateCombobox(players, function(ply) target.voice = ply:EntIndex() end)
 
 	-- Quick Actions
-	if vars.noclip or not vars.spectate then
-		local actions = m:AddSubMenu("Quick Actions")
+	local actions = m:AddSubMenu("Quick Actions")
 
+	if vars.spectate and not vars.window:GetBool() and IsValid(target.ent) then
+		actions:AddOption("Stop spectating", function() end)
+		actions:AddOption("Copy SteamID", function() SetClipboardText(target.ent:SteamID()) end)
+		actions:AddOption("Isolate voice", function() target.voice = target.ent:EntIndex() end)
+	else
 		local tr = util.TraceLine({
-			start = GetEyePos(),
-			endpos = GetEyePos() + (GetEyeAngles():Forward() * 8192),
-			filter = LocalPlayer()
+				start = GetEyePos(),
+				endpos = GetEyePos() + (GetEyeAngles():Forward() * 8192),
+				filter = LocalPlayer()
 		})
 
 		local ply = tr.Entity
@@ -593,9 +627,12 @@ surface.CreateFont("demo_info_big", {
 })
 
 
-local function DrawText(font, x, y, text, color, align)
+local function DrawText(font, x, y, text, color, align, outline_color)
+	outline_color = outline_color or Color(0, 0, 0, 255)
+	outline_color.a = color.a
+
 	align = align or TEXT_ALIGN_CENTER
-	return draw.SimpleTextOutlined(text, font, x, y, color, align, TEXT_ALIGN_CENTER, 1, Color(0, 0, 0, color.a))
+	return draw.SimpleTextOutlined(text, font, x, y, color, align, TEXT_ALIGN_CENTER, 1, outline_color)
 end
 
 player_Alive = player_Alive or PLAYER.Alive
@@ -604,7 +641,8 @@ player_GetBleedingAmount = player_GetBleedingAmount or PLAYER.GetBleedingAmount
 
 local function DrawClientESP(ply)
 	local font = "demo_mtext"
-	local color = team.GetColor(ply:Team())
+	local color = Color(200, 200, 200)
+	local team_color = ply:GetTeamColor() --team.GetColor(ply:Team())
 	local c = ply:GetPos():ToScreen()
 
 	local base = ScaleSize(20)
@@ -621,18 +659,28 @@ local function DrawClientESP(ply)
 		end
 	end
 
+	local job = ply:GetShortJobTitle()
 	if vars.show_rpname:GetBool() then
-		DrawText(font, c.x, c.y + yoffset, ply:GetRPName(true), color)
+		local color1 = color_white
+		local color2 = team_color
+
+		if job == "Citizen" then
+			color1 = color2
+			color2 = nil
+		end
+
+		DrawText(font, c.x, c.y + yoffset, ply:GetRPName(true), color1, nil, color2)
 		yoffset = yoffset + base
 	end
 
 	local player_name = ply:Nick()
-	local job = ply:GetShortJobTitle()
 	if vars.show_jobs:GetBool() and job ~= "Citizen" then
 		player_name = job .. " | " .. player_name
+		DrawText(font, c.x, c.y + yoffset, player_name, color_white, nil, team_color)
+	else
+		DrawText(font, c.x, c.y + yoffset, player_name, team_color)
 	end
 
-	DrawText(font, c.x, c.y + yoffset, player_name, color)
 	yoffset = yoffset + base
 
 	if vars.show_steamid:GetBool() then
@@ -809,11 +857,65 @@ hook.Add("OnTextEntryLoseFocus", "demo_lose_focus", function()
 	allow_keyboard = true
 end)
 
-local last_key_down = false
+-- Helper function to register keybinds
+-- You never need to manually update the list of think functions with this in place.
+local keybinds = {}
+local function CreateKeybind(name, cvar, OnFrame)
+	local last_key_down = false
+
+	table.insert(keybinds, { name = name, var = cvar, func = function()
+		local key = cvar and cvar:GetInt() or 0
+		local key_down = key ~= 0 and input.IsKeyDown(key) or false
+
+		OnFrame(key_down, last_key_down)
+
+		last_key_down = key_down
+	end})
+end
+
+CreateKeybind("Fast-forward", vars.fast_forward, function(key_down, last_key_down)
+	if key_down ~= last_key_down then
+		RunConsoleCommand("demo_timescale", base_timescale * (key_down and 2 or 1))
+	end
+end)
+
+CreateKeybind("Pause/resume", vars.pause, function(key_down, last_key_down)
+	if key_down and not last_key_down then
+		RunConsoleCommand("demo_togglepause")
+	end
+end)
+
+CreateKeybind("Third-person", vars.thirdperson_key, function(key_down, last_key_down)
+	if key_down and not last_key_down then
+		ToggleThirdPerson()
+	end
+end)
+
+CreateKeybind("Noclip", vars.noclip_key, function(key_down, last_key_down)
+	if key_down and not last_key_down then
+		ToggleDemoNoclip()
+	end
+end)
+
+CreateKeybind("Third-person mouse control", vars.mouse_control_key, function(key_down, last_key_down)
+	if key_down and not last_key_down then
+		ToggleMouseControl()
+	end
+end)
+
+local function UpdateKeybinds()
+	if not allow_keyboard then return end
+
+	for _, t in ipairs(keybinds) do
+		t.func()
+	end
+end
 
 local function HUDPaintESP()
 	local scrw = ScrW()
 	local scrh = ScrH()
+
+	UpdateKeybinds()
 
 	-- Preserve audio when the local player is dead:
 	-- Due to "demo_recordcommands" always being set to 1, "soundfade" is being executed constantly to prevent players from hearing stuff when dead.
@@ -821,13 +923,6 @@ local function HUDPaintESP()
 	if not player_Alive(LocalPlayer()) then
 		RunConsoleCommand("soundfade", "0", "0")
 	end
-
-	local key_down = vars.fast_forward:GetInt() ~= 0 and input.IsKeyDown(vars.fast_forward:GetInt()) or false
-	if key_down ~= last_key_down then
-		RunConsoleCommand("demo_timescale", base_timescale * (key_down and 2 or 1))
-	end
-
-	last_key_down = key_down
 
 	if is_playing_demo and vars.time:GetBool() then
 		local time = string.ToMinutesSeconds(engine.GetDemoPlaybackTick() * engine.TickInterval())
@@ -942,6 +1037,22 @@ local function HUDPaintESP()
 		filter = GetTarget(),
 	})
 
+	if vars.keybind_list:GetBool() then
+		local x = scrw * .99
+		local y = scrh * .9875
+		local base = ScaleSize(25)
+
+		for _, t in ipairs(keybinds) do
+			if not t.var or t.var:GetInt() == 0 then continue end
+			local key = t.var:GetInt()
+			local color = (allow_keyboard and input.IsKeyDown(key)) and Color(50, 255, 50) or color_white
+
+			DrawText("demo_info", x, y, t.name .. ": ", color_white, TEXT_ALIGN_RIGHT)
+			DrawText("demo_info", x, y, input.GetKeyName(key):upper(), color, TEXT_ALIGN_LEFT)
+			y = y - base
+		end
+	end
+
 	if vars.voice_list:GetBool() then
 		local x = scrw * .99
 		local y = scrh * .35
@@ -950,7 +1061,7 @@ local function HUDPaintESP()
 		local mode = target:GetNWInt("TalkMode", 1)
 		local base = ScaleSize(30)
 
-		DrawText("demo_info_big", x, y - base, string.format("Proximity list (%s)", mode == 2 and "whisper" or "normal"), color_white, TEXT_ALIGN_RIGHT)
+		DrawText("demo_info_big", x, y - base, string.format("Proximity list%s", mode == 2 and " [whisper]" or ""), color_white, TEXT_ALIGN_RIGHT)
 
 		for _, ply in player.Iterator() do
 			if not ply:Alive() or ply == target or not target:IsInChatRange(ply, mode == 2 and 3 or 1) then continue end
@@ -1020,9 +1131,13 @@ local function CalcView(ply, pos, ang, fov)
 
 	-- Thirdperson logic
 	if not vars.noclip and vars.thirdperson then
-		-- Reuse our noclip handling data for thirdperson
-		UpdateMouseData()
-		data.angles = mouse.ang -- Orbit around our "fake" viewangles
+		if vars.mouse_control:GetBool() then
+			-- Reuse our noclip handling data for thirdperson
+			UpdateMouseData()
+
+			-- Orbit around our "fake" viewangles
+			data.angles = mouse.ang
+		end
 
 		-- Move the camera back and slightly up
 		data.origin = data.origin + (data.angles:Forward() * -vars.fov:GetFloat()) + (data.angles:Up() * 4)
@@ -1043,7 +1158,7 @@ local function DrawOutlines()
 	local teams = {}
 	for _, ply in player.Iterator() do
 		-- We don't want to draw the outline for players who are dead. Their SetupBones does not correspond to their ragdoll's SetupBones and it looks weird.
-		if IsValid(ply) and player_Alive(ply) and not ply:IsDormant() and (vars.noclip or ply ~= target) and pos:DistToSqr(ply:GetPos()) <= range then
+		if IsValid(ply) and player_Alive(ply) and not ply:IsDormant() and (vars.noclip or vars.thirdperson or ply ~= target) and pos:DistToSqr(ply:GetPos()) <= range then
 			local ply_team = ply:Team()
 			teams[ply_team] = teams[ply_team] or {}
 			table.insert(teams[ply_team], ply)
@@ -1188,3 +1303,12 @@ if is_playing_demo then
 end
 
 
+-- Get rid of the annoying dome
+timer.Simple(2, function()
+	for _, entity in ents.Iterator() do
+		local model = entity:GetModel()
+		if model and model:find("dome") then
+			entity:SetNoDraw(true)
+		end
+	end
+end)
