@@ -135,13 +135,15 @@ end
 
 local function GetFOV()
 	local fov = mouse.fov:GetFloat()
+
 	if vars.zoom:GetBool() and vars.spectate and IsValid(target.ent) then
 		local swep = GetTarget():GetActiveWeapon()
 
 		-- dumping LocalPlayer():GetActiveweapon():GetTable() nets these and more functions
 		if IsValid(swep) and swep.IsIronSighting and swep:IsIronSighting() then
 			local zoom = swep.GetScopeMagnification and swep:GetScopeMagnification() or 1
-			return fov / zoom
+
+			return 90 / (zoom * 3)
 		end
 	end
 
@@ -1230,10 +1232,10 @@ local overrides = {
 	"SendAdvertMenu",
 	"perp2_drown",
 	"perp2_blood",
-	"PoliceComputerPanel"
+	"PoliceComputerPanel",
 }
 
-cached_overrides = cached_overrides or {}
+cached_overrides = cached_overrides or { temp = {} }
 for _, s in ipairs(overrides) do
 	local t = vgui.GetControlTable(s)
 	if not t then continue end
@@ -1252,6 +1254,26 @@ for _, s in ipairs(overrides) do
 	t["Show"] = function(...)
 		if vars.disable_uis:GetBool() then return end
 		cached_overrides[s][3](...)
+	end
+end
+
+-- Don't draw these menus while spectating / noclipping
+local temp_overrides = {
+	"Speedometer_Classic",
+	"Speedometer_Modern",
+}
+
+for _, s in ipairs(temp_overrides) do
+	local t = vgui.GetControlTable(s)
+	if not t then continue end
+
+	cached_overrides.temp[s] = cached_overrides.temp[s] or t.Paint
+	t.Paint = function(...)
+		if not cached_overrides.temp[s] or vars.noclip or (vars.spectate and IsValid(target.ent) and vars.window:GetBool() == false) then
+			return
+		end
+
+		return cached_overrides.temp[s](...)
 	end
 end
 
