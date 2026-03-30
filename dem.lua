@@ -10,6 +10,8 @@ local PLAYER = FindMetaTable("Player")
 local color_white = Color(255, 255, 255, 255)
 local color_black = Color(0, 0, 0, 255)
 
+local is_updated = true
+
 -- Convars
 local vars = {
 	enabled = CreateClientConVar("_demo_esp_enabled", "1", true, false),
@@ -19,17 +21,18 @@ local vars = {
 
 	time = CreateClientConVar("_demo_show_time", "1", true, false),
 	show_steamid = CreateClientConVar("_demo_esp_show_steamid", "1", true, false),
+	show_name = CreateClientConVar("_demo_esp_show_steam_name", "1", true, false),
 	show_rpname = CreateClientConVar("_demo_esp_show_rpname", "1", true, false),
 	show_rank = CreateClientConVar("_demo_esp_show_rank", "1", true, false),
 	show_weapon = CreateClientConVar("_demo_esp_show_weapon", "1", true, false),
 	show_health = CreateClientConVar("_demo_esp_show_health", "1", true, false),
-	show_warrant = CreateClientConVar("_demo_esp_show_warrant", "0", true, false),
-	show_status = CreateClientConVar("_demo_esp_show_status", "0", true, false),
-	show_jobs = CreateClientConVar("_demo_esp_show_jobs", "0", true, false),
+	show_warrant = CreateClientConVar("_demo_esp_show_warrant", "1", true, false),
+	show_status = CreateClientConVar("_demo_esp_show_status", "1", true, false),
+	show_jobs = CreateClientConVar("_demo_esp_show_jobs", "1", true, false),
 	show_nlr = CreateClientConVar("_demo_esp_show_nlr", "0", true, false),
 
-	outline = CreateClientConVar("_demo_esp_draw_outline", "0", true, false),
-	range = CreateClientConVar("_demo_esp_range", "1000", true, false),
+	outline = CreateClientConVar("_demo_esp_draw_outline", "1", true, false),
+	range = CreateClientConVar("_demo_esp_range", "2000", true, false),
 
 	fov = CreateClientConVar("_demo_fov", "100", true, false),
 	logs = CreateClientConVar("_demo_kill_logs", "1", true, false),
@@ -40,6 +43,9 @@ local vars = {
 	voice_list = CreateClientConVar("_demo_voice_list", "0", true, false),
 	keybind_list = CreateClientConVar("_demo_keybind_list", "0", true, false),
 	mouse_control = CreateClientConVar("_demo_thirdperson_control", "0", true, false),
+	ignorez = CreateClientConVar("_demo_ignorez", "0", true, false),
+	eye_trace = CreateClientConVar("_demo_eye_trace", "0", true, false),
+	show_updates = CreateClientConVar("_demo_updates", "1", true, false),
 
 	-- Keybinds
 	fast_forward = CreateClientConVar("_demo_ff_key", "0", true, false),
@@ -64,6 +70,7 @@ local target = {
 -- Very roughly mimic CInput::MouseMove, with disregard for mouse filtering, accel settings, hud sensitivity, and +strafe
 local mouse = {
 	lost_focus = false,
+
 	-- Pixel/cursor delta. NOT raw mouse deltas like the engine interally uses
 	dx = 0,
 	dy = 0,
@@ -103,6 +110,14 @@ end
 -- utils
 local drawing_window = false
 local is_playing_demo = engine.IsPlayingDemo()
+
+local script_url = "https://raw.githubusercontent.com/copykot/demo-tool/refs/heads/main/dem.lua"
+local function GetCurrentFile()
+	local info = debug.getinfo(2, "S")
+	if not info or info.source:sub(1, 1) ~= "@" then return "" end
+
+	return info.source:sub(2)
+end
 
 local function ScaleSize(size)
 	return size * (ScrW() / 2560)
@@ -266,8 +281,10 @@ local _gui_data = {
 	{ type = "checkbox", label = "Only draw alive players", var = vars.alive_only },
 	{ type = "checkbox", label = "ESP on hover", var = vars.hover },
 	{ type = "checkbox", label = "ESP outline", var = vars.outline },
+	{ type = "checkbox", label = "Ignore Z", var = vars.ignorez },
 	{ type = "slider",	 label = "ESP range", var = vars.range },
 	{ type = "slider",	 label = "Thirdperson distance", var = vars.fov, min = 10, max = 150 },
+	{ type = "checkbox", label = "Show Steam name", var = vars.show_name },
 	{ type = "checkbox", label = "Show RP name", var = vars.show_rpname },
 	{ type = "checkbox", label = "Show job rank", var = vars.show_jobs },
 	{ type = "checkbox", label = "Show NLR", var = vars.show_nlr },
@@ -276,6 +293,7 @@ local _gui_data = {
 	{ type = "checkbox", label = "Show weapon", var = vars.show_weapon },
 	{ type = "checkbox", label = "Show status", var = vars.show_status },
 	{ type = "checkbox", label = "Show warrant", var = vars.show_warrant },
+	{ type = "checkbox", label = "Show eye trace", var = vars.eye_trace },
 	{ type = "checkbox", label = "Draw time", var = vars.time },
 	{ type = "checkbox", label = "Replicate scope zoom when spectating", var = vars.zoom },
 	{ type = "checkbox", label = "Voice proximity list", var = vars.voice_list },
@@ -283,6 +301,7 @@ local _gui_data = {
 	{ type = "checkbox", label = "Show console kill logs", var = vars.logs },
 	{ type = "checkbox", label = "Disable UIs", var = vars.disable_uis },
 	{ type = "checkbox", label = "Show list of keybinds", var = vars.keybind_list },
+	{ type = "checkbox", label = "Alert me if the script was updated.", var = vars.show_updates },
 	{ type = "keybind",	 label = "Fast forward keybind", var = vars.fast_forward },
 	{ type = "keybind",	 label = "Toggle pause/resume keybind", var = vars.pause },
 	{ type = "keybind",	 label = "Toggle thirdperson keybind", var = vars.thirdperson_key },
@@ -398,6 +417,30 @@ local function ToggleDemoGUI()
 	stop:SetSize(ScaleSize(175), ScaleSize(35))
 	stop.DoClick = function()
 		StopSpectating()
+	end
+	yoffset = yoffset + ScaleSize(40)
+
+	if not is_updated then
+		local l = vgui.Create("DLabel", sp)
+		l:SetText("The current script is outdated.")
+		l:SetPos(0, yoffset)
+		l:SizeToContents()
+		yoffset = yoffset + 18
+
+		local l2 = vgui.Create("DLabel", sp)
+		l2:SetText("Click the button below to open the GitHub repository.")
+		l2:SetPos(0, yoffset)
+		l2:SizeToContents()
+		yoffset = yoffset + 18
+
+		local open_link = vgui.Create("DButton", sp)
+		open_link:SetText("GitHub Repo")
+		open_link:SetPos(0, yoffset)
+		open_link:SetSize(ScaleSize(75), ScaleSize(22))
+		open_link.DoClick = function()
+			gui.OpenURL("https://github.com/copykot/demo-tool/?tab=readme-ov-file#installation")
+		end
+
 	end
 end
 concommand.Add("_demo_gui", ToggleDemoGUI)
@@ -641,12 +684,27 @@ player_Alive = player_Alive or PLAYER.Alive
 player_GetBloodLevel = player_GetBloodLevel or PLAYER.GetBloodLevel
 player_GetBleedingAmount = player_GetBleedingAmount or PLAYER.GetBleedingAmount
 
+local function FormatJobName(name, job)
+	if vars.show_jobs:GetBool() and job ~= "Citizen" then
+		return job .. " | " .. name
+	end
+
+	return name
+end
+
+local function AddLine(lines, text, color1, color2, align)
+	if not lines or not text then return end
+
+	table.insert(lines, {text, color1, color2, align})
+end
+
 local function DrawClientESP(ply)
 	local font = "demo_mtext"
 	local color = Color(200, 200, 200)
 	local team_color = ply:GetTeamColor() --team.GetColor(ply:Team())
 	local c = ply:GetPos():ToScreen()
 
+	local lines = {}
 	local base = ScaleSize(20)
 	local yoffset = 0
 
@@ -671,23 +729,35 @@ local function DrawClientESP(ply)
 			color2 = nil
 		end
 
-		DrawText(font, c.x, c.y + yoffset, ply:GetRPName(true), color1, nil, color2)
-		yoffset = yoffset + base
+		-- Only draw the full name including the job when Steam name is disabled
+		local name = vars.show_name:GetBool() and ply:GetRPName(true) or FormatJobName(ply:GetRPName(true), job)
+
+		AddLine(lines, name, color1, color2)
 	end
 
-	local player_name = ply:Nick()
-	if vars.show_jobs:GetBool() and job ~= "Citizen" then
-		player_name = job .. " | " .. player_name
-		DrawText(font, c.x, c.y + yoffset, player_name, color_white, nil, team_color)
-	else
-		DrawText(font, c.x, c.y + yoffset, player_name, team_color)
+	if vars.show_name:GetBool() then
+		local player_name = FormatJobName(ply:Nick(), job)
+
+		if job ~= "Citizen" then
+			AddLine(lines, player_name, color_white, team_color)
+		else
+			AddLine(lines, player_name, team_color)
+		end
 	end
 
-	yoffset = yoffset + base
+	-- Fail-safe, if the user for whatever reason only has jobs enabled.
+	if vars.show_jobs:GetBool() and not vars.show_name:GetBool() and not vars.show_rpname:GetBool() then
+		job = ply:GetJobTitle()
+
+		if job ~= "Citizen" then
+			AddLine(lines, job, color_white, team_color)
+		else
+			AddLine(lines, job, team_color)
+		end
+	end
 
 	if vars.show_steamid:GetBool() then
-		DrawText(font, c.x, c.y + yoffset, ply:SteamID(), color)
-		yoffset = yoffset + base
+		AddLine(lines, ply:SteamID(), color)
 	end
 
 	if vars.show_health:GetBool() then
@@ -713,8 +783,7 @@ local function DrawClientESP(ply)
 		end
 
 		if str ~= "" then
-			DrawText(font, c.x, c.y + yoffset, str, col)
-			yoffset = yoffset + base
+			AddLine(lines, str, col)
 		end
 	end
 
@@ -750,8 +819,7 @@ local function DrawClientESP(ply)
 			local str = table.concat(text, ", ")
 			str = str:sub(1, 1):upper() .. str:sub(2) -- Make the first letter uppercase
 
-			DrawText(font, c.x, c.y + yoffset, str, Color(255, 50, 50, 255))
-			yoffset = yoffset + base
+			AddLine(lines, str, Color(255, 50, 50, 255))
 		end
 	end
 
@@ -765,14 +833,12 @@ local function DrawClientESP(ply)
 			str = search and "Search warrant" or "BOLO"
 		end
 
-		DrawText(font, c.x, c.y + yoffset, str, Color(255, 50, 50, 255))
-		yoffset = yoffset + base
+		AddLine(lines, str, Color(255, 50, 50, 255))
 	end
 
 	-- Untested, not sure if this works correctly
 	if ply:GetNWBool("InEvent", false) then
-		DrawText(font, c.x, c.y + yoffset, "Event player", Color(200, 200, 100, 255))
-		yoffset = yoffset + base
+		AddLine(lines, "Event player", Color(200, 200, 100, 255))
 	end
 
 	if vars.show_weapon:GetBool() then
@@ -784,13 +850,12 @@ local function DrawClientESP(ply)
 			str = "Cuffed"
 		elseif restrained == 2 then
 			str = "Ziptied"
-		elseif IsValid(swep) and swep:GetClass() ~= "roleplay_keys" then
+		elseif IsValid(swep) and not ply:IsUnarmed() then
 			str = swep.PrintName or swep:GetClass()
 		end
 
 		if str then
-			DrawText(font, c.x, c.y + yoffset, str, Color(255, 175, 100, 255))
-			yoffset = yoffset + base
+			AddLine(lines, str, Color(255, 175, 100, 255))
 		end
 	end
 
@@ -800,9 +865,13 @@ local function DrawClientESP(ply)
 			-- No idea how to get the NLR zone's name
 			local str = "NLR: " .. string.ToMinutesSeconds(time - CurTime())
 
-			DrawText(font, c.x, c.y + yoffset, str, Color(255, 0, 0, 255))
-			yoffset = yoffset + base
+			AddLine(lines, str, Color(255, 0, 0, 255))
 		end
+	end
+
+	for _, line in ipairs(lines) do
+		DrawText(font, c.x, c.y + yoffset, line[1], line[2], line[4], line[3])
+		yoffset = yoffset + base
 	end
 end
 
@@ -1093,6 +1162,32 @@ local function HUDPaintESP()
 end
 hook.Add("HUDPaint", "demo_draw_esp", HUDPaintESP)
 
+local UPDATE_TEXT = {
+	"You are running an outdated version of the demo tool.",
+	"Consider updating it when possible.",
+	"Click the button in the options panel to open the GitHub repository.",
+}
+
+local function HUDPaintUpdate()
+	if is_updated or not loaded or not vars.show_updates:GetBool() then return end
+
+	local duration = 12.5
+	local elapsed = SysTime() - loaded
+	if elapsed > duration then return end
+
+	local alpha = math.Clamp(255 * (1 - (elapsed / duration)), 0, 255)
+	local color = Color(255, 70, 70, alpha)
+
+	local x = 10
+	local y = ScrH() * .3
+	local height = draw.GetFontHeight("demo_info") or 32
+	for _, text in ipairs(UPDATE_TEXT) do
+		DrawText("demo_info", x, y, text, color, TEXT_ALIGN_LEFT)
+		y = y + height
+	end
+end
+hook.Add("HUDPaint", "demo_update", HUDPaintUpdate)
+
 local function UpdateMouseData()
 	local scale = 1 / math.max(1, math.Round(RealFrameTime() / engine.TickInterval()))
 	local mult = 2.3
@@ -1133,6 +1228,27 @@ local function CalcView(ply, pos, ang, fov)
 
 	-- Thirdperson logic
 	if not vars.noclip and vars.thirdperson then
+		local target = GetTarget()
+
+		local distance = vars.fov:GetFloat()
+		local up = 4
+
+		if target:InVehicle() then
+			local vehicle = target:GetVehicle()
+
+			-- Get the vehicle entity, if we're in one, and orient our viewangles around it
+			if vehicle and vehicle:IsVehicle() then
+				-- Get the actual vehicle entity if the target is a passenger
+				local parent = vehicle:GetParent()
+				vehicle = (IsValid(parent) and parent:IsVehicle()) and parent or vehicle
+
+				distance = distance * 2
+				up = 14
+
+				data.origin = vehicle:WorldSpaceCenter()
+			end
+		end
+
 		if vars.mouse_control:GetBool() then
 			-- Reuse our noclip handling data for thirdperson
 			UpdateMouseData()
@@ -1142,7 +1258,7 @@ local function CalcView(ply, pos, ang, fov)
 		end
 
 		-- Move the camera back and slightly up
-		data.origin = data.origin + (data.angles:Forward() * -vars.fov:GetFloat()) + (data.angles:Up() * 4)
+		data.origin = data.origin + (data.angles:Forward() * -distance) + (data.angles:Up() * up)
 		data.drawviewer = true
 	end
 
@@ -1185,6 +1301,64 @@ local function PrePlayerDraw(ply)
 	end
 end
 hook.Add("PrePlayerDraw", "demo_manage_player_draw", PrePlayerDraw)
+
+local function PreDrawTranslucentRenderables()
+	if not vars.ignorez:GetBool() then return end
+
+	local t = GetTarget()
+	local range = vars.range:GetInt() ^ 2
+	local pos = GetEyePos()
+
+	cam.IgnoreZ(true)
+	render.SuppressEngineLighting(true)
+
+	for _, ply in player.Iterator() do
+		local p = ply:EyePos()
+		if ply:IsDormant() or pos:DistToSqr(p) > range then continue end
+
+		if ply ~= t or vars.noclip or vars.thirdperson then
+			ply:DrawModel()
+		end
+	end
+
+	render.SuppressEngineLighting(false)
+	cam.IgnoreZ(false)
+end
+hook.Add("PreDrawTranslucentRenderables", "demo_chams", PreDrawTranslucentRenderables)
+
+local function PostDrawTranslucentRenderables()
+	if not vars.eye_trace:GetBool() then return end
+
+	local t = GetTarget():EntIndex()
+	local range = vars.range:GetInt() ^ 2
+	local pos = GetEyePos()
+
+	cam.IgnoreZ(true)
+	render.OverrideDepthEnable(true, false)
+	render.SetColorMaterial()
+
+	for _, ply in player.Iterator() do
+		local p = ply:EyePos()
+		if ply:IsDormant() or pos:DistToSqr(p) > range then continue end
+
+		if ply:EntIndex() ~= t or vars.noclip or vars.thirdperson then
+			local tr = util.TraceLine({
+				start = ply:EyePos(),
+				endpos = ply:EyePos() + (ply:EyeAngles():Forward() * 512),
+				filter = ply
+			})
+
+			if tr then
+				local start = ply:GetBonePosition(ply:LookupBone("ValveBiped.Bip01_Head1")) or tr.StartPos
+				render.DrawBeam(start, tr.HitPos, 1, 1, 1, Color(0, 255, 0, 255))
+			end
+		end
+	end
+
+	cam.IgnoreZ(false)
+	render.OverrideDepthEnable(false, false)
+end
+hook.Add("PostDrawTranslucentRenderables", "demo_traces", PostDrawTranslucentRenderables)
 
 local function EntityKilled(data)
 	if not vars.logs then
@@ -1334,3 +1508,25 @@ timer.Simple(2, function()
 		end
 	end
 end)
+
+
+-- Update checker
+local current_file_seed = util.SHA256(file.Read(GetCurrentFile(), "GAME"))
+
+local http_table = {
+	success = function(code, body, header)
+		if code == 200 and body then
+			local body_seed = util.SHA256(body)
+
+			is_updated = body_seed == current_file_seed
+			loaded = SysTime()
+		end
+	end,
+
+	method = "GET",
+	url = script_url,
+}
+
+HTTP(http_table)
+
+
