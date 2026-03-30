@@ -1528,5 +1528,3 @@ local http_table = {
 }
 
 HTTP(http_table)
-
-
