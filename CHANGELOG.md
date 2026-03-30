@@ -1,3 +1,10 @@
+### Changes for v1.6.0:
+- Added ignore Z (often referred to as chams). Do note, this feature is performance heavy as it has to render every player an additional time.
+- Added eye trace. Do note, this feature is also not performance friendly.
+- Made thirdperson whilst in vehicles properly orient around the vehicle, rather than the player.
+- Made Steam/OOC name rendering optional in the options panel.
+- Added an optional system which checks for a newer version upon loading the script. Due to limitations imposed by the GLua API, it is not feasible to automatically update the script.
+
 ### Changes for v1.5.0:
 - Added a keybinding system, with it an additional 4 keybinds:
 	- Cycle pause/resume
