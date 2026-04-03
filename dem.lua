@@ -156,9 +156,11 @@ local function GetFOV()
 
 		-- dumping LocalPlayer():GetActiveweapon():GetTable() nets these and more functions
 		if IsValid(swep) and swep.IsIronSighting and swep:IsIronSighting() then
-			local zoom = swep.GetScopeMagnification and (swep:GetScopeMagnification() * 3) or 1
+			local zoom = swep.GetScopeMagnification and swep:GetScopeMagnification() or 1
 
-			return 90 / zoom
+			if zoom ~= 1 then
+				return 90 / (zoom * 3)
+			end
 		end
 	end
 
